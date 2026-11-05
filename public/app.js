@@ -334,7 +334,7 @@ function materialForm() {
     <form class="form" id="mf">
       <div><label>Title</label><input name="title" placeholder="e.g. Chapter 4 – Cell Biology"></div>
       <div><label>Course</label><select name="course_id">${courseOpts('')}</select></div>
-      <div><label>Upload a file (PDF, image or .txt)</label><input type="file" name="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.txt,.md"></div>
+      <div><label>Upload a file (PDF, image or .txt, up to 4 MB)</label><input type="file" name="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.txt,.md"></div>
       <div class="muted small" style="text-align:center">— or —</div>
       <div><label>Paste notes</label><textarea name="body" rows="7" placeholder="Paste or type your notes here…"></textarea></div>
       <div class="row" style="justify-content:flex-end"><button type="button" class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn">Save</button></div>
@@ -343,6 +343,7 @@ function materialForm() {
       e.preventDefault();
       const fd = new FormData(e.target);
       if (!fd.get('file')?.size) fd.delete('file');
+      else if (fd.get('file').size > 4 * 1024 * 1024) return toast('That file is too big — sheets can be up to 4 MB. Try compressing the PDF or splitting it.', true);
       try { const r = await POST('/api/materials', fd); closeModal(); location.hash = `#/materials/${r.id}`; } catch (err) { fail(err); }
     };
   });

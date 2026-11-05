@@ -8,10 +8,17 @@ const { generateMCQs, aiAvailable } = require('./ai');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const PROD = process.env.NODE_ENV === 'production';
+const PROD = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
 
-app.set('trust proxy', 1); // behind Render's proxy: lets secure cookies work
-app.use(express.json({ limit: '5mb' }));
+app.set('trust proxy', 1); // behind the host's proxy: lets secure cookies work
+
+// Create tables once per server instance, before handling any API request
+if (process.env.VERCEL && !process.env.TURSO_DATABASE_URL) console.error('TURSO_DATABASE_URL is not set — add it in the Vercel project settings.');
+const ready = db.init();
+ready.catch((e) => console.error('Could not open the database:', e.message));
+app.use('/api', (req, res, next) => ready.then(() => next(), next));
+
+app.use(express.json({ limit: '4mb' }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/healthz', (req, res) => res.send('ok'));
@@ -274,7 +281,7 @@ app.patch('/api/tasks/:id/mine', auth, async (req, res) => {
 // ---------- study materials (sheets) ----------
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 },
+  limits: { fileSize: 4 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const ok = file.mimetype === 'application/pdf' || /^image\/(png|jpeg|gif|webp)$/.test(file.mimetype) || file.mimetype.startsWith('text/');
     cb(ok ? null : httpError(400, 'Only PDF, image (png/jpg/webp/gif) or text files are supported'), ok);
@@ -572,10 +579,16 @@ app.get('/api/reminders', auth, async (req, res) => {
 // ---------- errors ----------
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 app.use((err, req, res, next) => {
+  if (err.code === 'LIMIT_FILE_SIZE' || err.type === 'entity.too.large') err = httpError(413, 'That file is too big — sheets can be up to 4 MB. Try compressing the PDF or splitting it.');
   if (!err.status && !(err instanceof multer.MulterError)) console.error(err);
   res.status(err.status || (err instanceof multer.MulterError ? 400 : 500)).json({ error: err.message || 'Server error' });
 });
 
-db.init().then(() => {
-  app.listen(PORT, () => console.log(`StudyHub running at http://localhost:${PORT}  (database: ${process.env.TURSO_DATABASE_URL ? 'Turso' : 'local file'}, AI ${aiAvailable() ? 'enabled' : 'disabled'})`));
-}).catch((e) => { console.error('Could not open the database:', e.message); process.exit(1); });
+// On Vercel the app is exported and run as a serverless function; locally (or on any
+// normal host) it listens on a port.
+module.exports = app;
+if (!process.env.VERCEL) {
+  ready.then(() => {
+    app.listen(PORT, () => console.log(`StudyHub running at http://localhost:${PORT}  (database: ${process.env.TURSO_DATABASE_URL ? 'Turso' : 'local file'}, AI ${aiAvailable() ? 'enabled' : 'disabled'})`));
+  }).catch((e) => { console.error('Could not open the database:', e.message); process.exit(1); });
+}
