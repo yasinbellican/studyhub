@@ -153,11 +153,29 @@ async function route() {
   let [name, ...args] = (location.hash.replace(/^#\/?/, '').split('?')[0] || 'dashboard').split('/');
   if (adminRoutes.includes(name) && !isAdmin()) name = 'dashboard';
   const fn = routes[name] || dashboard;
-  $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.route === (routes[name] ? name : 'dashboard')));
+  const active = routes[name] ? name : 'dashboard';
+  $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.route === active));
+  const link = $(`#nav a[data-route="${active}"]`);
+  $('#top-title').textContent = link ? link.textContent.trim() : 'StudyHub';
+  closeMenu();
+  window.scrollTo(0, 0);
   view.innerHTML = '<p class="muted">Loading…</p>';
   try { await fn(...args); } catch (e) { if (e.message !== 'Not signed in') view.innerHTML = `<div class="banner red">${esc(e.message)}</div>`; }
 }
 window.addEventListener('hashchange', route);
+
+// ---------- ☰ menu (phones & tablets) ----------
+function openMenu() { document.body.classList.add('nav-open'); $('#menu-btn').setAttribute('aria-expanded', 'true'); }
+function closeMenu() { document.body.classList.remove('nav-open'); $('#menu-btn').setAttribute('aria-expanded', 'false'); }
+$('#menu-btn').onclick = openMenu;
+$('#menu-close').onclick = closeMenu;
+$('#scrim').onclick = closeMenu;
+$('#nav').addEventListener('click', (e) => { if (e.target.closest('a')) closeMenu(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
+// swipe left on the open menu to close it
+let touchX = null;
+$('#sidebar').addEventListener('touchstart', (e) => { touchX = e.touches[0].clientX; }, { passive: true });
+$('#sidebar').addEventListener('touchend', (e) => { if (touchX !== null && touchX - e.changedTouches[0].clientX > 60) closeMenu(); touchX = null; });
 
 // =====================================================================
 // DASHBOARD
@@ -277,7 +295,7 @@ async function taskForm(t = {}) {
       <div class="two"><div><label>Default due date</label><input type="datetime-local" name="due_at" value="${toLocalInput(t.default_due_at)}"></div>
         <div><label>Priority</label><select name="priority">${['low', 'medium', 'high'].map((x) => `<option ${(t.priority || 'medium') === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div></div>
       <div><label>Due date per section (leave empty to use the default)</label>
-        ${secs.map((s) => `<div class="row" style="flex-wrap:nowrap;margin-bottom:6px"><span style="min-width:120px" class="small">${esc(s.name)}</span>
+        ${secs.map((s) => `<div class="row" style="margin-bottom:6px"><span style="min-width:110px" class="small">${esc(s.name)}</span>
           <input type="datetime-local" data-sec="${s.id}" value="${toLocalInput(dues[s.id])}"></div>`).join('')}</div>
       <div><label>Notes</label><textarea name="notes" placeholder="Chapters covered, requirements…">${esc(t.notes)}</textarea></div>
       <div><label>Graded out of (optional)</label><input type="number" step="any" name="max_grade" value="${t.max_grade ?? ''}"></div>
@@ -356,7 +374,7 @@ async function materialReader(id) {
   const total = m.question_count, mastered = m.mastered;
   view.innerHTML = `
     <div class="page-head"><div><a href="#/materials" class="small">← All sheets</a><h1>${esc(m.title)}</h1></div></div>
-    <div class="grid" style="grid-template-columns: minmax(0,1fr) 300px; align-items:start">
+    <div class="split">
       <div class="reader card">${content}</div>
       <div class="grid">
         <div class="card"><h3>🎯 Master this sheet</h3>
@@ -445,7 +463,7 @@ async function nextQuestion() {
     <div class="qtext">${esc(Q.question)}</div>
     <div id="choices">${Q.choices.map((ch, i) => `<button class="choice" data-i="${i}"><span class="key">${letters[i]}</span><span>${esc(ch)}</span></button>`).join('')}</div>
     <div id="after"></div>
-    <div class="small muted" style="margin-top:10px">Tip: press 1–${Q.choices.length} to answer, Enter for next.</div></div>`;
+    <div class="small muted kbd-tip" style="margin-top:10px">Tip: press 1–${Q.choices.length} to answer, Enter for next.</div></div>`;
   let answered = false;
   const answer = async (i) => {
     if (answered) return; answered = true;
@@ -556,8 +574,8 @@ async function planner() {
     <div class="page-head"><div><h1>Planner</h1><div class="muted">Deadlines and study sessions in one calendar. Click a day to add a session.</div></div>
       <div class="row"><button class="btn ghost" id="prev">‹</button><b style="min-width:150px;text-align:center">${calMonth.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</b>
       <button class="btn ghost" id="next">›</button><button class="btn ghost small" id="today">Today</button></div></div>
-    <div class="grid" style="grid-template-columns:minmax(0,1fr) 280px;align-items:start">
-      <div><div class="cal">${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => `<div class="dow">${d}</div>`).join('')}${cells.join('')}</div></div>
+    <div class="split">
+      <div class="cal-wrap"><div class="cal">${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => `<div class="dow">${d}</div>`).join('')}${cells.join('')}</div></div>
       <div class="card"><h3>Upcoming deadlines</h3><div class="small muted" style="margin-bottom:10px">Auto-plan study sessions until the due date.</div>
         <div class="list">${tests.length ? tests.map((t) => `<div><div class="row spread"><span class="badge ${t.type}">${t.type}</span><button class="btn soft small" data-plan-task="${t.id}">📅 Make study plan</button></div>
           <div style="margin-top:4px"><b>${esc(t.title)}</b></div><div class="small">${fmtDue(t.due_at)}</div></div>`).join('<hr style="border:0;border-top:1px solid var(--line);width:100%">')
@@ -612,13 +630,17 @@ setInterval(async () => {
     T.running = false; saveT();
     if (location.hash.startsWith('#/focus')) focus();
   }
+  const top = $('#top-timer');
   if (T.running || T.remaining !== T.focusMin * 60 || T.phase === 'break') {
     mini.classList.remove('hidden');
     mini.textContent = `${T.phase === 'focus' ? '🎯 Focus' : '☕ Break'} ${fmtClock(timeLeft())}${T.running ? '' : ' (paused)'}`;
-  } else mini.classList.add('hidden');
+    top.classList.remove('hidden');
+    top.textContent = `${T.phase === 'focus' ? '🎯' : '☕'} ${fmtClock(timeLeft())}${T.running ? '' : ' ⏸'}`;
+  } else { mini.classList.add('hidden'); top.classList.add('hidden'); }
   const clock = $('#clock'); if (clock) clock.textContent = fmtClock(timeLeft());
 }, 500);
 $('#timer-mini').onclick = () => (location.hash = '#/focus');
+$('#top-timer').onclick = () => (location.hash = '#/focus');
 
 function focus() {
   view.innerHTML = `<div class="practice">
@@ -699,7 +721,7 @@ async function classPage() {
         <form class="row" id="sf" style="margin-top:10px;flex-wrap:nowrap"><input name="name" required placeholder="New section, e.g. Section 4"><button class="btn small">Add</button></form></div>
     </div>
     <div class="card"><h2>Members (${c.members.length})</h2>
-      <div class="list">${c.members.map((m) => `<div class="row" style="flex-wrap:nowrap;border-bottom:1px solid var(--line);padding-bottom:8px">
+      <div class="list">${c.members.map((m) => `<div class="row" style="border-bottom:1px solid var(--line);padding-bottom:8px">
         <div style="flex:1;min-width:0"><b>${esc(m.name)}</b> ${m.id === ME.id ? '<span class="small muted">(you)</span>' : ''}<div class="small muted">${esc(m.email)}</div></div>
         <select data-msec="${m.id}" style="width:auto">${secOpts(m.section_id)}</select>
         <select data-mrole="${m.id}" style="width:auto"><option value="student" ${m.role === 'student' ? 'selected' : ''}>Student</option><option value="admin" ${m.role === 'admin' ? 'selected' : ''}>Admin / rep</option></select>

@@ -132,13 +132,87 @@ textarea { min-height: 90px; resize: vertical; }
 .banner { padding: 12px 16px; border-radius: 10px; margin-bottom: 14px; background: var(--amber-soft); color: #92400e; }
 .banner.red { background: var(--red-soft); color: #991b1b; }
 
-@media (max-width: 800px) {
-  .shell { flex-direction: column; }
-  .sidebar { width: 100%; height: auto; position: static; }
-  #nav { display: flex; overflow-x: auto; gap: 4px; }
-  #nav a { white-space: nowrap; }
-  .sidebar-foot { display: flex; align-items: center; }
-  .view { padding: 18px; }
-  .cal .day { min-height: 70px; }
-  .form .two { grid-template-columns: 1fr; }
+/* ---------- responsive layout ---------- */
+/* two-column page layouts (sheet reader, planner) */
+.split { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) 300px; align-items: start; }
+.cal-wrap { min-width: 0; }
+
+/* top bar + drawer pieces: hidden on desktop */
+.topbar, .scrim, .menu-close { display: none; }
+.menu-btn, .menu-close { background: transparent; border: 0; color: inherit; font-size: 24px; line-height: 1; cursor: pointer; padding: 8px 10px; border-radius: 8px; }
+.menu-btn:hover, .menu-close:hover { background: rgba(255,255,255,.1); }
+
+/* inputs never overflow their row */
+.row > input, .row > select { min-width: 0; flex: 1 1 140px; }
+img, iframe { max-width: 100%; }
+
+/* tablets & phones: sidebar becomes a slide-out drawer opened by the ☰ button */
+@media (max-width: 900px) {
+  .shell { display: block; }
+  .topbar {
+    display: flex; align-items: center; gap: 10px; position: sticky; top: 0; z-index: 30;
+    height: 56px; padding: 0 8px; padding-left: max(8px, env(safe-area-inset-left));
+    background: #1c1d3a; color: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.15);
+  }
+  .top-title { font-weight: 700; font-size: 17px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .top-timer { font-size: 13px; background: rgba(255,255,255,.12); padding: 5px 9px; border-radius: 99px; font-variant-numeric: tabular-nums; cursor: pointer; }
+  .sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0; z-index: 45; width: min(290px, 84vw); height: 100dvh;
+    transform: translateX(-102%); transition: transform .25s ease; overflow-y: auto;
+    padding-top: max(18px, env(safe-area-inset-top)); box-shadow: 4px 0 24px rgba(0,0,0,.25);
+  }
+  body.nav-open .sidebar { transform: none; }
+  body.nav-open { overflow: hidden; }
+  .scrim { position: fixed; inset: 0; z-index: 40; background: rgba(10, 10, 30, .5); opacity: 0; pointer-events: none; transition: opacity .25s; display: block; }
+  body.nav-open .scrim { opacity: 1; pointer-events: auto; }
+  .menu-close { display: block; position: absolute; top: 12px; right: 10px; color: #cfd2ef; font-size: 20px; }
+  #nav a { padding: 12px 14px; font-size: 16px; }
+  .view { padding: 18px 16px 90px; max-width: none; }
+  .split { grid-template-columns: 1fr; }
+  .reader iframe { height: 70vh; }
 }
+
+/* phones */
+@media (max-width: 600px) {
+  body { font-size: 15px; }
+  h1 { font-size: 21px; }
+  .page-head { align-items: stretch; }
+  .page-head > .btn, .page-head > .row { width: 100%; justify-content: center; }
+  .card { padding: 14px; }
+  .stats { grid-template-columns: 1fr 1fr; }
+  .stat .num { font-size: 22px; }
+  .g2, .g3 { grid-template-columns: 1fr; }
+  .form .two { grid-template-columns: 1fr; }
+  .filters > * { flex: 1 1 140px; min-width: 0; }
+  .filters select, .filters input { width: 100%; min-width: 0; }
+  .tabs { overflow-x: auto; }
+  .tabs button { white-space: nowrap; }
+
+  /* list items: text on top, buttons wrap underneath */
+  .item { flex-wrap: wrap; gap: 8px 10px; }
+  .item .grow { flex: 1 1 calc(100% - 90px); }
+  .item > select { flex: 1 1 120px; }
+
+  /* practice */
+  .qcard { padding: 18px; }
+  .qtext { font-size: 17px; }
+  .choice { padding: 12px; }
+
+  /* calendar: compact cells, events as coloured bars */
+  .cal { gap: 3px; }
+  .cal .dow { font-size: 10px; }
+  .cal .day { min-height: 54px; padding: 4px; border-radius: 6px; }
+  .cal .ev { font-size: 0; height: 5px; padding: 0; margin-top: 3px; border-radius: 3px; }
+  .cal .ev.plan { border-left: 0; background: var(--primary); opacity: .45; }
+
+  .timer { padding: 22px 10px; }
+  .timer .clock { font-size: 62px; }
+  .modal { padding: 10px; align-items: end; }
+  .modal-card { padding: 18px; border-radius: 16px 16px 12px 12px; max-height: 92dvh; }
+  .toast { left: 12px; right: 12px; transform: none; text-align: center; }
+  .auth .card { padding: 22px; }
+  input, select, textarea { font-size: 16px; } /* stops iPhone zooming into fields */
+}
+
+/* keyboard tips are useless on touch screens */
+@media (hover: none) { .kbd-tip { display: none; } }
