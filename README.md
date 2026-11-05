@@ -17,7 +17,7 @@ A study web app for one class. The class is split into **sections** by timetable
 
 ## Run it
 
-Requires Node.js 22.5 or newer, because it uses the built-in `node:sqlite`.
+Requires Node.js 22.9 or newer. Locally the data is kept in a `studyhub.db` file.
 
 ```bash
 npm install
@@ -31,11 +31,36 @@ Then open http://localhost:3000.
 3. Classmates choose **"Join with an invite code"**, enter the code and pick their section.
 4. To make another rep an admin, change their role on the **Class & Sections** page.
 
+## Put it online for free
+
+StudyHub runs on **Render** (free web service), and its data is stored in **Turso** (free database, 5 GB). Neither needs a credit card. Uploaded sheets are stored in the database too, so nothing is lost when the free server restarts.
+
+1. **Create the database (Turso)**
+   1. Sign up at https://turso.tech (you can sign in with GitHub).
+   2. Create a database, for example `studyhub`.
+   3. Copy its **database URL**, which starts with `libsql://`.
+   4. Create a **database token** and copy it.
+2. **Deploy the app (Render)**
+   1. Sign up at https://render.com with GitHub.
+   2. Choose **New → Blueprint** and pick this repository. Render reads `render.yaml`.
+   3. When asked, paste the Turso URL into `TURSO_DATABASE_URL` and the token into `TURSO_AUTH_TOKEN`.
+   4. `ANTHROPIC_API_KEY` is optional; leave it empty to keep AI off.
+   5. Click **Apply**. After a few minutes the app is live at `https://studyhub-xxxx.onrender.com`.
+3. Open that link and set up the class. **Do this first**, because the first person to sign up becomes the admin. Then share the link and the invite code with your classmates.
+
+Every push to `main` redeploys automatically.
+
+How the free tier behaves:
+- The app goes to sleep after 15 minutes without visitors. The next visit takes about a minute to wake it up.
+- Reminders only appear while the app is open in a browser tab.
+
 ## Turn on AI question generation
 
 1. Copy `.env.example` to `.env`.
 2. Set `ANTHROPIC_API_KEY=` to your key from https://console.anthropic.com/.
-3. Restart with `npm start`.
+3. Restart with `npm start`. Online, set `ANTHROPIC_API_KEY` in the Render service's **Environment** settings instead.
+
+The Anthropic API is paid per use. Everything else in StudyHub works without it.
 
 Generation uses `claude-opus-5-5` by default. You can change it with `CLAUDE_MODEL`. To test without a key, set `MOCK_AI=1` to get placeholder questions.
 
@@ -44,7 +69,7 @@ Generation uses `claude-opus-5-5` by default. You can change it with `CLAUDE_MOD
 | File | What it does |
 |---|---|
 | `server.js` | Express API: auth, courses, tasks, sheets, questions, spaced repetition, planner, dashboard |
-| `db.js` | SQLite schema (`studyhub.db` is created automatically) |
+| `db.js` | Database layer (libSQL): a local file, or Turso when `TURSO_DATABASE_URL` is set. Uploaded files are stored in it too |
 | `ai.js` | Generates MCQs with Claude from a PDF, image or text |
 | `public/` | Frontend (`index.html`, `app.js`, `styles.css`) in plain JS with no build step |
-| `uploads/` | Uploaded study sheets |
+| `render.yaml` | Render deploy settings (free plan) |

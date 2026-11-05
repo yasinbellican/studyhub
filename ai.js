@@ -1,6 +1,5 @@
 // AI multiple-choice question generation with Claude.
 // Needs ANTHROPIC_API_KEY in .env. Set MOCK_AI=1 to test without a key.
-const fs = require('fs');
 const Anthropic = require('@anthropic-ai/sdk');
 
 const MODEL = process.env.CLAUDE_MODEL || 'claude-opus-5-5';
@@ -43,10 +42,10 @@ function mockQuestions(count) {
 }
 
 /**
- * material: row from materials table; filePath: absolute path of uploaded file (or null)
+ * material: row from materials table; fileData: Buffer with the uploaded file (or null for text notes)
  * existing: array of existing question strings for this material (to avoid duplicates)
  */
-async function generateMCQs({ material, filePath, count = 10, difficulty = 'mixed', focus = '', existing = [] }) {
+async function generateMCQs({ material, fileData, count = 10, difficulty = 'mixed', focus = '', existing = [] }) {
   if (process.env.MOCK_AI === '1') return mockQuestions(count);
   if (!process.env.ANTHROPIC_API_KEY) {
     const err = new Error('AI is not configured. Add ANTHROPIC_API_KEY to the .env file and restart the server.');
@@ -60,13 +59,13 @@ async function generateMCQs({ material, filePath, count = 10, difficulty = 'mixe
   if (material.kind === 'pdf') {
     content.push({
       type: 'document',
-      source: { type: 'base64', media_type: 'application/pdf', data: fs.readFileSync(filePath).toString('base64') },
+      source: { type: 'base64', media_type: 'application/pdf', data: fileData.toString('base64') },
       title: material.title,
     });
   } else if (material.kind === 'image') {
     content.push({
       type: 'image',
-      source: { type: 'base64', media_type: material.mime, data: fs.readFileSync(filePath).toString('base64') },
+      source: { type: 'base64', media_type: material.mime, data: fileData.toString('base64') },
     });
   } else {
     content.push({ type: 'document', source: { type: 'text', media_type: 'text/plain', data: material.body }, title: material.title });

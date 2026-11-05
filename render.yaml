@@ -1,0 +1,21 @@
+# Render blueprint: free web service. Data lives in Turso (free), so nothing
+# is lost when the free instance sleeps or restarts.
+services:
+  - type: web
+    name: studyhub
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false

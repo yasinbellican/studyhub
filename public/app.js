@@ -163,7 +163,7 @@ window.addEventListener('hashchange', route);
 // DASHBOARD
 // =====================================================================
 async function dashboard() {
-  const [d, mastery] = await Promise.all([GET('/api/dashboard'), GET('/api/mastery')]);
+  const [d, mastery] = await Promise.all([GET(`/api/dashboard?today=${ymd(new Date())}&tz_offset=${new Date().getTimezoneOffset()}`), GET('/api/mastery')]);
   const acc = d.answered_week.n ? Math.round((d.answered_week.c / d.answered_week.n) * 100) : null;
   const weak = mastery.flatMap((c) => c.topics.map((t) => ({ ...t, course: c.course_name, course_id: c.course_id })))
     .filter((t) => t.total >= 1 && t.mastery < 60).sort((a, b) => a.mastery - b.mastery).slice(0, 5);
@@ -299,7 +299,7 @@ function planTaskDialog(t) {
     <div class="form"><div><label>Minutes per session</label><input type="number" id="pm" value="45" min="10" max="240"></div>
     <div class="row" style="justify-content:flex-end"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn" id="go">Create plan</button></div></div>`, (m) => {
     $('#go', m).onclick = async () => {
-      try { const r = await POST(`/api/tasks/${t.id}/plan`, { minutes: $('#pm', m).value }); closeModal(); toast(`Planned ${r.created} study sessions`); location.hash = '#/planner'; }
+      try { const r = await POST(`/api/tasks/${t.id}/plan`, { minutes: $('#pm', m).value, tz_offset: new Date().getTimezoneOffset() }); closeModal(); toast(`Planned ${r.created} study sessions`); location.hash = '#/planner'; }
       catch (e) { fail(e); }
     };
   });
