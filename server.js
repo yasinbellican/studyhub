@@ -177,7 +177,8 @@ app.post('/api/logout', async (req, res) => {
 
 app.get('/api/me', auth, async (req, res) => res.json({ ...req.user, class_name: await getSetting('class_name'), ai: aiAvailable() }));
 app.get('/api/sections', auth, async (req, res) => res.json(await db.all('SELECT id, name FROM sections ORDER BY name')));
-app.patch('/api/me/section', auth, async (req, res) => {
+// only admins may change sections (students keep the section they joined with)
+app.patch('/api/me/section', ...A, async (req, res) => {
   await db.run('UPDATE users SET section_id = ? WHERE id = ?', await checkSection(req.body.section_id), req.user.id);
   res.json({ ok: true });
 });
@@ -251,6 +252,42 @@ app.delete('/api/admin/members/:id', ...A, async (req, res) => {
 
 // ---------- courses ----------
 app.get('/api/courses', auth, async (req, res) => res.json(await db.all('SELECT * FROM courses ORDER BY name')));
+
+// every course with how many assignments / quizzes / exams / sheets / questions it holds
+const COUNTS_SQL = (where) => `
+  (SELECT COUNT(*) FROM tasks t WHERE ${where('t')} AND t.type = 'assignment') AS assignments,
+  (SELECT COUNT(*) FROM tasks t WHERE ${where('t')} AND t.type = 'quiz') AS quizzes,
+  (SELECT COUNT(*) FROM tasks t WHERE ${where('t')} AND t.type = 'exam') AS exams,
+  (SELECT COUNT(*) FROM materials m WHERE ${where('m')}) AS sheets,
+  (SELECT COUNT(*) FROM questions q WHERE ${where('q')}) AS questions`;
+app.get('/api/courses/overview', auth, async (req, res) => {
+  const courses = await db.all(`SELECT c.*, ${COUNTS_SQL((a) => `${a}.course_id = c.id`)},
+      (SELECT COUNT(*) FROM questions q JOIN progress p ON p.question_id = q.id AND p.user_id = ? WHERE q.course_id = c.id AND p.reps >= 4) AS mastered
+    FROM courses c ORDER BY c.name`, req.user.id);
+  const none = await db.get(`SELECT ${COUNTS_SQL((a) => `${a}.course_id IS NULL`)}`);
+  res.json({ courses, uncategorized: none });
+});
+
+// everything that belongs to one course ('none' = items without a course)
+app.get('/api/courses/:id/content', auth, async (req, res) => {
+  const none = req.params.id === 'none';
+  const cid = none ? null : Number(req.params.id);
+  const course = none ? { id: 'none', name: 'No course', color: '#9ca3af' } : await db.get('SELECT * FROM courses WHERE id = ?', cid);
+  if (!course) return res.status(404).json({ error: 'Course not found' });
+  const match = (a) => (none ? `${a}.course_id IS NULL` : `${a}.course_id = ${cid}`);
+  const tasks = await db.all(taskQuery(match('t')) + ` ORDER BY (COALESCE(ut.status,'todo') = 'done'), COALESCE(td.due_at, t.due_at) IS NULL, COALESCE(td.due_at, t.due_at)`, tp(req));
+  if (req.user.perms.includes('tasks') && tasks.length) {
+    const dues = await db.all(`SELECT task_id, section_id, due_at FROM task_due WHERE task_id IN (${tasks.map((t) => t.id).join(',')})`);
+    for (const t of tasks) t.section_dues = Object.fromEntries(dues.filter((d) => d.task_id === t.id).map((d) => [d.section_id, d.due_at]));
+  }
+  const materials = await db.all(`SELECT m.id, m.title, m.kind, m.course_id, m.created_at,
+      (SELECT COUNT(*) FROM questions q WHERE q.material_id = m.id) AS question_count,
+      (SELECT COUNT(*) FROM questions q JOIN progress p ON p.question_id = q.id AND p.user_id = ? WHERE q.material_id = m.id AND p.reps >= 4) AS mastered
+    FROM materials m WHERE ${match('m')} ORDER BY m.created_at DESC`, req.user.id);
+  const qs = await db.get(`SELECT COUNT(*) AS total, COALESCE(SUM(p.reps >= 4), 0) AS mastered
+    FROM questions q LEFT JOIN progress p ON p.question_id = q.id AND p.user_id = ? WHERE ${match('q')}`, req.user.id);
+  res.json({ course, tasks, materials, questions: qs });
+});
 app.post('/api/courses', ...can('courses'), async (req, res) => {
   if (!req.body.name) return res.status(400).json({ error: 'Name required' });
   const r = await db.run('INSERT INTO courses (name, color) VALUES (?, ?)', req.body.name, req.body.color || '#6366f1');
@@ -281,13 +318,18 @@ async function saveSectionDues(taskId, dues) {
   for (const [sid, due] of Object.entries(dues || {})) if (due) stmts.push(['INSERT INTO task_due (task_id, section_id, due_at) VALUES (?, ?, ?)', taskId, await checkSection(sid), due]);
   await db.batch(stmts);
 }
-async function taskFields(b) {
+// new items must be filed under a course (once the class has any courses)
+async function requireCourse(courseId) {
+  if ((courseId == null || courseId === '') && (await db.get('SELECT COUNT(*) AS n FROM courses')).n > 0) throw httpError(400, 'Choose a course for this item');
+}
+async function taskFields(b, isNew = false) {
   if (!b.title) throw httpError(400, 'Title required');
+  if (isNew) await requireCourse(b.course_id);
   return [b.title, b.type || 'assignment', nul(b.due_at), b.priority || 'medium', b.notes || '', nul(b.max_grade), await checkCourse(b.course_id)];
 }
 app.post('/api/tasks', ...can('tasks'), async (req, res) => {
   const r = await db.run(`INSERT INTO tasks (title, type, due_at, priority, notes, max_grade, course_id, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, ...(await taskFields(req.body)), req.user.id);
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, ...(await taskFields(req.body, true)), req.user.id);
   await saveSectionDues(r.lastInsertRowid, req.body.section_dues);
   res.json({ id: r.lastInsertRowid });
 });
@@ -345,6 +387,7 @@ app.get('/api/materials/:id/file', auth, async (req, res) => {
 });
 app.post('/api/materials', ...can('sheets'), upload.single('file'), async (req, res) => {
   const { title, course_id, body } = req.body;
+  await requireCourse(course_id);
   const courseId = await checkCourse(course_id);
   let kind = 'text', fileId = null, mime = null, text = body || '';
   if (req.file) {
@@ -368,6 +411,19 @@ async function deleteQuestions(where, arg) {
   const list = ids.join(',');
   await db.batch([[`DELETE FROM progress WHERE question_id IN (${list})`], [`DELETE FROM reviews WHERE question_id IN (${list})`], [`DELETE FROM questions WHERE id IN (${list})`]]);
 }
+// rename a sheet or move it to another course (its questions move with it)
+app.patch('/api/materials/:id', ...can('sheets'), async (req, res) => {
+  const m = await db.get('SELECT * FROM materials WHERE id = ?', req.params.id);
+  if (!m) return res.status(404).json({ error: 'Not found' });
+  const stmts = [];
+  if (req.body.title) stmts.push(['UPDATE materials SET title = ? WHERE id = ?', String(req.body.title).trim(), m.id]);
+  if ('course_id' in req.body) {
+    const cid = await checkCourse(req.body.course_id);
+    stmts.push(['UPDATE materials SET course_id = ? WHERE id = ?', cid, m.id], ['UPDATE questions SET course_id = ? WHERE material_id = ?', cid, m.id]);
+  }
+  if (stmts.length) await db.batch(stmts);
+  res.json({ ok: true });
+});
 app.delete('/api/materials/:id', ...can('sheets'), async (req, res) => {
   const m = await db.get('SELECT * FROM materials WHERE id = ?', req.params.id);
   if (m) {

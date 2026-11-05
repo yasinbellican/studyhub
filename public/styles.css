@@ -236,3 +236,18 @@ img, iframe { max-width: 100%; }
 @media (display-mode: standalone) {
   .topbar { padding-top: env(safe-area-inset-top); height: calc(56px + env(safe-area-inset-top)); }
 }
+
+/* courses as folders */
+.course-card { display: block; color: inherit; text-decoration: none; transition: transform .1s, box-shadow .1s; }
+.course-card:hover { transform: translateY(-2px); box-shadow: 0 4px 18px rgba(20, 20, 50, .1); }
+.course-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.chip { font-size: 12.5px; padding: 3px 9px; border-radius: 99px; background: #f1f2f8; color: var(--text); }
+.course-section { margin-bottom: 22px; }
+.course-section h2 { margin-bottom: 10px; }
+.course-link { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; color: inherit; text-decoration: none; flex-wrap: wrap; }
+.course-link:hover { background: #f6f7fb; }
+.course-link .small { margin-left: auto; }
+.tabs { flex-wrap: wrap; }
+
+/* colour pickers keep their size inside rows */
+.row > input[type="color"] { flex: 0 0 54px; }

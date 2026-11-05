@@ -92,7 +92,8 @@ async function showAuth(mode) {
         <div><label>Invite code (ask your class rep)</label><div class="row" style="flex-wrap:nowrap">
           <input name="code" required placeholder="e.g. 9F3A1C0B" style="text-transform:uppercase"><button type="button" class="btn soft" id="check">Check</button></div></div>
         <div id="join-rest" class="form hidden">
-          <div><label>Your section</label><select name="section_id" id="sec" required></select></div>
+          <div><label>Your section</label><select name="section_id" id="sec" required></select>
+            <div class="small muted" style="margin-top:4px">Choose carefully — after joining, only an admin can change your section.</div></div>
           <div><label>Your name</label><input name="name" required autocomplete="name"></div>${creds(true)}
           <button class="btn big">Join class</button></div>
         <p class="small muted" style="text-align:center;margin:0">Already have an account? <a href="#" id="auth-switch">Sign in</a></p></form></div>`;
@@ -125,9 +126,11 @@ async function boot() {
   try { ME = await GET('/api/me'); } catch { return; }
   $('#auth').classList.add('hidden'); $('#shell').classList.remove('hidden');
   $('.brand').textContent = '📚 ' + (ME.class_name || 'StudyHub');
+  // only admins can change sections; students just see theirs
   $('#me').innerHTML = `<b>${esc(ME.name)}</b>${isAdmin() ? ' <span class="badge">admin</span>' : ''}<br>
-    <a href="#" id="my-section" style="color:#cfd2ef">${esc(ME.section_name || 'No section')} · change</a>`;
-  $('#my-section').onclick = (e) => { e.preventDefault(); sectionDialog(); };
+    ${isAdmin() ? `<a href="#" id="my-section" style="color:#cfd2ef">${esc(ME.section_name || 'No section')} · change</a>`
+      : `<span style="color:#cfd2ef">${esc(ME.section_name || 'No section')}</span>`}`;
+  $('#my-section')?.addEventListener('click', (e) => { e.preventDefault(); sectionDialog(); });
   $$('.admin-only').forEach((el) => el.classList.toggle('hidden', !isAdmin()));
   $$('[data-perm]').forEach((el) => el.classList.toggle('hidden', !can(el.dataset.perm)));
   await loadCourses();
@@ -137,6 +140,12 @@ async function boot() {
 }
 
 async function sectionDialog() {
+  if (!isAdmin()) {
+    // students can't pick their own section — only an admin can place them
+    return openModal(`<h2>No section yet</h2><p class="muted">You're not in a section right now, so due dates show the class default.
+      Ask an admin to put you in your section (Class & Sections page).</p>
+      <div class="row" style="justify-content:flex-end"><button class="btn" onclick="closeModal()">OK</button></div>`);
+  }
   const secs = await GET('/api/sections');
   openModal(`<h2>Your section</h2><p class="muted">Due dates are shown for your section's timetable.</p>
     <div class="form"><select id="sec-pick">${secs.map((s) => `<option value="${s.id}" ${s.id === ME.section_id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
@@ -184,10 +193,7 @@ $('#sidebar').addEventListener('touchend', (e) => { if (touchX !== null && touch
 // DASHBOARD
 // =====================================================================
 async function dashboard() {
-  const [d, mastery] = await Promise.all([GET(`/api/dashboard?today=${ymd(new Date())}&tz_offset=${new Date().getTimezoneOffset()}`), GET('/api/mastery')]);
-  const acc = d.answered_week.n ? Math.round((d.answered_week.c / d.answered_week.n) * 100) : null;
-  const weak = mastery.flatMap((c) => c.topics.map((t) => ({ ...t, course: c.course_name, course_id: c.course_id })))
-    .filter((t) => t.total >= 1 && t.mastery < 60).sort((a, b) => a.mastery - b.mastery).slice(0, 5);
+  const [d, overview] = await Promise.all([GET(`/api/dashboard?today=${ymd(new Date())}&tz_offset=${new Date().getTimezoneOffset()}`), GET('/api/courses/overview')]);
   const notifBtn = 'Notification' in window && Notification.permission === 'default'
     ? '<button class="btn soft small" id="notif">🔔 Enable reminders</button>' : '';
 
@@ -206,24 +212,18 @@ async function dashboard() {
       <div class="stat ${d.reviews_due ? 'alert' : ''}"><div class="num">${d.reviews_due}</div><div class="lbl">MCQs due for review</div></div>
       <div class="stat"><div class="num">${d.new_questions}</div><div class="lbl">new questions waiting</div></div>
       <div class="stat"><div class="num">${Math.round(d.minutes_week / 6) / 10}h</div><div class="lbl">focused study this week</div></div>
-      <div class="stat"><div class="num">${acc === null ? '—' : acc + '%'}</div><div class="lbl">accuracy this week (${d.answered_week.n} answers)</div></div>
     </div>
     <div class="grid g2">
       <div class="card"><div class="row spread"><h2>Coming up</h2><a href="#/tasks" class="small">All tasks →</a></div>
         <div class="list">${d.upcoming.length ? d.upcoming.map(taskRowSimple).join('') : '<div class="empty">Nothing coming up. Add an assignment or quiz.</div>'}</div></div>
       <div class="card"><div class="row spread"><h2>Today's study plan</h2><a href="#/planner" class="small">Planner →</a></div>
         <div class="list" id="today-plan">${d.today_plan.length ? d.today_plan.map(planRow).join('') : '<div class="empty">No sessions planned today.<br><span class="small">Open an exam or quiz in the Planner and click “Make study plan”.</span></div>'}</div></div>
-      <div class="card"><h2>Mastery by course</h2>
-        ${mastery.length ? mastery.map((c) => `<div style="margin-bottom:12px"><div class="row spread small"><span>${courseTag(c.course_name, c.color || '#999')}</span>
-          <span><b>${c.mastery}%</b> <span class="muted">· ${c.mastered}/${c.total} mastered</span></span></div>${bar(c.mastery)}</div>`).join('')
-          : `<div class="empty">No questions yet.${can('sheets') || can('questions') ? ' Upload a study sheet and generate MCQs.' : ' Your class reps will add them.'}</div>`}</div>
-      <div class="card"><h2>Weak spots</h2>
-        ${weak.length ? `<div class="list">${weak.map((t) => `<div class="row spread"><div><b>${esc(t.topic)}</b> <span class="muted small">${esc(t.course)}</span><br>
-          <span class="small muted">Mastery ${t.mastery}%${t.accuracy !== null ? ` · accuracy ${t.accuracy}%` : ''} · ${t.total} questions</span></div>
-          <a class="btn soft small" href="#/practice?topic=${encodeURIComponent(t.topic)}${t.course_id ? `&course_id=${t.course_id}` : ''}&mode=cram">Practice</a></div>`).join('')}</div>`
-          : '<div class="empty">No weak spots yet — keep practising!</div>'}
-        ${d.grades.length ? `<h3 style="margin-top:18px">Grade averages</h3>${d.grades.map((g) => `<div class="row spread small"><span>${courseTag(g.course_name, g.color || '#999')}</span><b>${g.pct}%</b></div>`).join('')}` : ''}
-      </div>
+      <div class="card"><div class="row spread"><h2>Courses</h2><a href="#/courses" class="small">All courses →</a></div>
+        ${overview.courses.length ? `<div class="list">${overview.courses.map((c) => `<a class="course-link" href="#/courses/${c.id}">
+          <span class="dot" style="background:${esc(c.color)}"></span><b>${esc(c.name)}</b>
+          <span class="small muted">${courseCounts(c)}</span></a>`).join('')}</div>`
+          : `<div class="empty">No courses yet.${can('courses') ? ' Add one on the Courses page.' : ''}</div>`}</div>
+      ${d.grades.length ? `<div class="card"><h2>Grade averages</h2>${d.grades.map((g) => `<div class="row spread small" style="margin-bottom:6px"><span>${courseTag(g.course_name, g.color || '#999')}</span><b>${g.pct}%</b></div>`).join('')}</div>` : ''}
     </div>`;
   bindPlanRows($('#today-plan'), dashboard);
   $('#install-card-btn').onclick = installApp;
@@ -263,13 +263,19 @@ async function tasks() {
   $$('.tabs button').forEach((b) => (b.onclick = () => { taskFilter.status = b.dataset.s; tasks(); }));
   $('#f-type').onchange = (e) => { taskFilter.type = e.target.value; tasks(); };
   $('#f-course').onchange = (e) => { taskFilter.course = e.target.value; tasks(); };
-  $('#add')?.addEventListener('click', () => taskForm());
-  $$('[data-status]').forEach((s) => (s.onchange = async () => { await PATCH(`/api/tasks/${s.dataset.status}/mine`, { status: s.value }).catch(fail); tasks(); }));
-  $$('[data-grade]').forEach((b) => (b.onclick = () => gradeDialog(all.find((t) => t.id == b.dataset.grade))));
-  $$('[data-edit]').forEach((b) => (b.onclick = () => taskForm(all.find((t) => t.id == b.dataset.edit))));
-  $$('[data-del]').forEach((b) => (b.onclick = async () => { if (confirm('Delete this item?')) { await DEL(`/api/tasks/${b.dataset.del}`); tasks(); } }));
-  $$('[data-plan-task]').forEach((b) => (b.onclick = () => planTaskDialog(all.find((t) => t.id == b.dataset.planTask))));
+  $('#add')?.addEventListener('click', () => taskForm({ course_id: taskFilter.course || undefined }));
+  bindTaskRows(view, all, tasks);
 }
+// wires up the buttons inside task rows (status, grade, plan, edit, delete)
+function bindTaskRows(root, all, refresh) {
+  const find = (id) => all.find((t) => t.id == id);
+  $$('[data-status]', root).forEach((s) => (s.onchange = async () => { await PATCH(`/api/tasks/${s.dataset.status}/mine`, { status: s.value }).catch(fail); refresh(); }));
+  $$('[data-grade]', root).forEach((b) => (b.onclick = () => gradeDialog(find(b.dataset.grade))));
+  $$('[data-edit]', root).forEach((b) => (b.onclick = () => taskForm(find(b.dataset.edit))));
+  $$('[data-del]', root).forEach((b) => (b.onclick = async () => { if (confirm('Delete this item?')) { await DEL(`/api/tasks/${b.dataset.del}`); refresh(); } }));
+  $$('[data-plan-task]', root).forEach((b) => (b.onclick = () => planTaskDialog(find(b.dataset.planTask))));
+}
+const noCoursesYet = () => `<div class="banner">Add a course first — every item belongs to a course. ${can('courses') ? '<a href="#/courses" onclick="closeModal()">Go to Courses →</a>' : 'Ask an admin to add one.'}</div>`;
 const taskRow = (t) => `<div class="item ${t.status === 'done' ? 'done' : ''}">
   <span class="badge ${t.type}">${t.type}</span>
   <div class="grow"><div class="title">${esc(t.title)} ${t.priority === 'high' ? '<span class="badge high">high</span>' : ''}</div>
@@ -298,10 +304,11 @@ async function taskForm(t = {}) {
   const secs = await GET('/api/sections');
   const dues = t.section_dues || {};
   openModal(`<h2>${t.id ? 'Edit' : 'Add'} shared item</h2>
+    ${COURSES.length ? '' : noCoursesYet()}
     <form class="form" id="tf">
       <div><label>Title</label><input name="title" required value="${esc(t.title)}" placeholder="e.g. Physics Lab Report 3"></div>
       <div class="two"><div><label>Type</label><select name="type">${['assignment', 'quiz', 'exam'].map((x) => `<option ${t.type === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
-        <div><label>Course</label><select name="course_id">${courseOpts(t.course_id)}</select></div></div>
+        <div><label>Course</label><select name="course_id" ${t.id && !t.course_id ? '' : 'required'}>${courseOpts(t.course_id, 'Choose a course…')}</select></div></div>
       <div class="two"><div><label>Default due date</label><input type="datetime-local" name="due_at" value="${toLocalInput(t.default_due_at)}"></div>
         <div><label>Priority</label><select name="priority">${['low', 'medium', 'high'].map((x) => `<option ${(t.priority || 'medium') === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div></div>
       <div><label>Due date per section (leave empty to use the default)</label>
@@ -351,17 +358,18 @@ async function materials(id) {
         ${can('sheets') ? `<button class="btn danger small" data-del="${m.id}">✕</button>` : ''}</div>
       ${m.question_count ? `<div class="small muted" style="margin-top:10px">You've mastered ${m.mastered}/${m.question_count}</div>${bar((m.mastered / m.question_count) * 100, 'green')}` : ''}</div>`).join('')
       : `<div class="card empty" style="grid-column:1/-1">No study sheets yet.${can('sheets') ? ' Click “Add sheet” to upload the first one for the class.' : ' Your class reps will add them here.'}</div>`}</div>`;
-  $('#add')?.addEventListener('click', materialForm);
+  $('#add')?.addEventListener('click', () => materialForm());
   $$('[data-del]').forEach((b) => (b.onclick = async () => {
     if (confirm('Delete this sheet and all questions generated from it?')) { await DEL(`/api/materials/${b.dataset.del}`); materials(); }
   }));
 }
 
-function materialForm() {
+function materialForm(courseId = '') {
   openModal(`<h2>Add study sheet</h2>
+    ${COURSES.length ? '' : noCoursesYet()}
     <form class="form" id="mf">
       <div><label>Title</label><input name="title" placeholder="e.g. Chapter 4 – Cell Biology"></div>
-      <div><label>Course</label><select name="course_id">${courseOpts('')}</select></div>
+      <div><label>Course</label><select name="course_id" required>${courseOpts(courseId, 'Choose a course…')}</select></div>
       <div><label>Upload a file (PDF, image or .txt, up to 4 MB)</label><input type="file" name="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.txt,.md"></div>
       <div class="muted small" style="text-align:center">— or —</div>
       <div><label>Paste notes</label><textarea name="body" rows="7" placeholder="Paste or type your notes here…"></textarea></div>
@@ -686,26 +694,108 @@ function focus() {
 // =====================================================================
 // COURSES
 // =====================================================================
-async function courses() {
+// short summary like "2 assignments · 1 quiz · 3 sheets"
+function courseCounts(c) {
+  const parts = [[c.assignments, 'assignment'], [c.quizzes, 'quiz'], [c.exams, 'exam'], [c.sheets, 'sheet']]
+    .filter(([n]) => n).map(([n, w]) => `${n} ${w}${n === 1 ? '' : w === 'quiz' ? 'zes' : 's'}`);
+  return parts.length ? parts.join(' · ') : 'Empty';
+}
+
+async function courses(id) {
+  if (id) return courseDetail(id);
   await loadCourses();
-  const mastery = await GET('/api/mastery');
-  const mOf = (id) => mastery.find((m) => m.course_id === id);
+  const o = await GET('/api/courses/overview');
+  const u = o.uncategorized;
+  const hasLoose = u.assignments + u.quizzes + u.exams + u.sheets > 0;
   view.innerHTML = `
-    <div class="page-head"><div><h1>Courses</h1><div class="muted">Your mastery in each of the class's courses.</div></div></div>
+    <div class="page-head"><div><h1>Courses</h1><div class="muted">Every assignment, quiz, exam and study sheet lives inside its course. Open one to see everything.</div></div></div>
     ${can('courses') ? `<form class="card row" id="cf" style="margin-bottom:16px;flex-wrap:nowrap">
       <input name="name" required placeholder="New course name, e.g. Organic Chemistry">
-      <input type="color" name="color" value="#5b5bd6" style="width:54px;padding:3px">
+      <input type="color" name="color" value="#5b5bd6" style="width:54px;padding:3px" title="Course colour">
       <button class="btn">Add</button></form>` : ''}
-    <div class="grid g3">${COURSES.map((c) => { const m = mOf(c.id); return `<div class="card">
-      <div class="row spread"><div class="row"><span class="dot" style="background:${esc(c.color)};width:14px;height:14px"></span><h3 style="margin:0">${esc(c.name)}</h3></div>
-        ${can('courses') ? `<button class="btn danger small" data-del="${c.id}">✕</button>` : ''}</div>
-      <div class="small muted" style="margin:10px 0 4px">${m ? `Mastery ${m.mastery}% · ${m.mastered}/${m.total} questions mastered` : 'No questions yet'}</div>${bar(m?.mastery || 0)}
-      <div class="row" style="margin-top:12px"><a class="btn soft small" href="#/practice?course_id=${c.id}">🎯 Practice</a>
-        ${can('questions') ? `<a class="btn ghost small" href="#/questions?course_id=${c.id}">Questions</a>` : ''}</div></div>`; }).join('')
-      || `<div class="card empty" style="grid-column:1/-1">${can('courses') ? 'Add the first course above.' : 'No courses yet.'}</div>`}</div>`;
+    <div class="grid g3">${o.courses.map((c) => `<a class="card course-card" href="#/courses/${c.id}" style="border-top:4px solid ${esc(c.color)}">
+      <div class="row spread"><h3 style="margin:0">📁 ${esc(c.name)}</h3><span class="muted">›</span></div>
+      <div class="course-chips">
+        <span class="chip">📝 ${c.assignments} assignment${c.assignments === 1 ? '' : 's'}</span>
+        <span class="chip">❓ ${c.quizzes} quiz${c.quizzes === 1 ? '' : 'zes'}</span>
+        <span class="chip">🎓 ${c.exams} exam${c.exams === 1 ? '' : 's'}</span>
+        <span class="chip">📄 ${c.sheets} sheet${c.sheets === 1 ? '' : 's'}</span>
+      </div>
+      ${c.questions ? `<div class="small muted" style="margin-top:8px">${c.mastered}/${c.questions} MCQs mastered</div>${bar((c.mastered / c.questions) * 100, 'green')}` : ''}
+    </a>`).join('')
+      || `<div class="card empty" style="grid-column:1/-1">${can('courses') ? 'Add the first course above.' : 'No courses yet.'}</div>`}
+    ${hasLoose ? `<a class="card course-card" href="#/courses/none" style="border-top:4px solid #9ca3af">
+      <div class="row spread"><h3 style="margin:0">🗃️ Not in a course</h3><span class="muted">›</span></div>
+      <div class="small muted" style="margin-top:8px">${courseCounts(u)}. ${can('tasks') || can('sheets') ? 'Open to move them into a course.' : ''}</div></a>` : ''}</div>`;
   $('#cf')?.addEventListener('submit', async (e) => { e.preventDefault(); try { await POST('/api/courses', Object.fromEntries(new FormData(e.target))); await loadCourses(); courses(); } catch (err) { fail(err); } });
-  $$('[data-del]').forEach((b) => (b.onclick = async () => {
-    if (confirm('Delete this course? Tasks, sheets and questions stay, but lose their course.')) { await DEL(`/api/courses/${b.dataset.del}`); courses(); }
+}
+
+let courseTab = 'all';
+async function courseDetail(id) {
+  await loadCourses();
+  const d = await GET(`/api/courses/${id}/content`);
+  const c = d.course, loose = id === 'none';
+  const by = (type) => d.tasks.filter((t) => t.type === type);
+  const groups = [
+    { key: 'assignment', icon: '📝', title: 'Assignments', items: by('assignment') },
+    { key: 'quiz', icon: '❓', title: 'Quizzes', items: by('quiz') },
+    { key: 'exam', icon: '🎓', title: 'Exams', items: by('exam') },
+  ];
+  const tabs = [['all', 'All', d.tasks.length + d.materials.length], ...groups.map((g) => [g.key, g.title, g.items.length]), ['sheets', 'Study sheets', d.materials.length]];
+  if (!tabs.some(([k]) => k === courseTab)) courseTab = 'all';
+  const show = (k) => courseTab === 'all' || courseTab === k;
+  const addTaskBtn = (type) => (can('tasks') && !loose ? `<button class="btn soft small" data-add-type="${type}">+ Add</button>` : '');
+  const sheetCard = (m) => `<div class="item">
+    <span class="badge gray">${m.kind.toUpperCase()}</span>
+    <div class="grow"><div class="title">${esc(m.title)}</div>
+      <div class="small muted">${m.question_count} MCQs${m.question_count ? ` · you've mastered ${m.mastered}` : ''} · added ${new Date(m.created_at.replace(' ', 'T') + 'Z').toLocaleDateString()}</div></div>
+    <a class="btn small" href="#/materials/${m.id}">📖 Open</a>
+    ${m.question_count ? `<a class="btn soft small" href="#/practice?material_id=${m.id}">🎯 Practice</a>` : ''}
+    ${can('sheets') ? `<button class="btn ghost small" data-move-sheet="${m.id}" title="Move to another course">Move</button><button class="btn danger small" data-del-sheet="${m.id}">✕</button>` : ''}</div>`;
+
+  view.innerHTML = `
+    <div class="page-head"><div><a href="#/courses" class="small">← All courses</a>
+      <h1 class="row" style="gap:10px"><span class="dot" style="background:${esc(c.color)};width:16px;height:16px"></span>${esc(c.name)}</h1>
+      <div class="muted small">${d.tasks.length} item${d.tasks.length === 1 ? '' : 's'} · ${d.materials.length} study sheet${d.materials.length === 1 ? '' : 's'}${d.questions.total ? ` · ${d.questions.mastered}/${d.questions.total} MCQs mastered` : ''}</div></div>
+      <div class="row">${!loose && d.questions.total ? `<a class="btn" href="#/practice?course_id=${c.id}">🎯 Practice this course</a>` : ''}
+        ${can('courses') && !loose ? `<button class="btn ghost" id="edit-course">✏️ Edit</button>` : ''}</div></div>
+    <div class="tabs">${tabs.map(([k, label, n]) => `<button data-ctab="${k}" class="${courseTab === k ? 'active' : ''}">${label} <span class="muted">${n}</span></button>`).join('')}</div>
+    ${groups.map((g) => (show(g.key) ? `<section class="course-section">
+      <div class="row spread"><h2>${g.icon} ${g.title} <span class="muted small">${g.items.length}</span></h2>${addTaskBtn(g.key)}</div>
+      <div class="list">${g.items.length ? g.items.map(taskRow).join('') : `<div class="empty small">No ${g.title.toLowerCase()} yet.</div>`}</div></section>` : '')).join('')}
+    ${show('sheets') ? `<section class="course-section">
+      <div class="row spread"><h2>📄 Study sheets <span class="muted small">${d.materials.length}</span></h2>${can('sheets') && !loose ? '<button class="btn soft small" id="add-sheet">+ Add</button>' : ''}</div>
+      <div class="list">${d.materials.length ? d.materials.map(sheetCard).join('') : '<div class="empty small">No study sheets yet.</div>'}</div></section>` : ''}`;
+
+  const refresh = () => courseDetail(id);
+  $$('[data-ctab]').forEach((b) => (b.onclick = () => { courseTab = b.dataset.ctab; refresh(); }));
+  $$('[data-add-type]').forEach((b) => (b.onclick = () => taskForm({ type: b.dataset.addType, course_id: c.id })));
+  $('#add-sheet')?.addEventListener('click', () => materialForm(c.id));
+  bindTaskRows(view, d.tasks, refresh);
+  $$('[data-del-sheet]').forEach((b) => (b.onclick = async () => {
+    if (confirm('Delete this sheet and all questions generated from it?')) { await DEL(`/api/materials/${b.dataset.delSheet}`).catch(fail); refresh(); }
+  }));
+  $$('[data-move-sheet]').forEach((b) => (b.onclick = () => openModal(`<h2>Move sheet to…</h2>
+    <div class="form"><select id="mv">${courseOpts(loose ? '' : c.id, 'Choose a course…')}</select>
+    <div class="row" style="justify-content:flex-end"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn" id="mv-go">Move</button></div></div>`, (m) => {
+    $('#mv-go', m).onclick = async () => {
+      if (!$('#mv', m).value) return toast('Choose a course', true);
+      try { await PATCH(`/api/materials/${b.dataset.moveSheet}`, { course_id: $('#mv', m).value }); closeModal(); toast('Sheet moved'); refresh(); } catch (e) { fail(e); }
+    };
+  })));
+  $('#edit-course')?.addEventListener('click', () => openModal(`<h2>Edit course</h2>
+    <form class="form" id="ecf"><div><label>Name</label><input name="name" required value="${esc(c.name)}"></div>
+      <div><label>Colour</label><input type="color" name="color" value="${esc(c.color)}" style="width:70px;padding:3px"></div>
+      <div class="row spread"><button type="button" class="btn danger" id="del-course">Delete course</button>
+        <div class="row"><button type="button" class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn">Save</button></div></div></form>`, (m) => {
+    $('#ecf', m).onsubmit = async (e) => {
+      e.preventDefault();
+      try { await PUT(`/api/courses/${c.id}`, Object.fromEntries(new FormData(e.target))); closeModal(); toast('Saved'); refresh(); } catch (err) { fail(err); }
+    };
+    $('#del-course', m).onclick = async () => {
+      if (!confirm('Delete this course? Its assignments, quizzes, exams and sheets are kept, but move to “Not in a course”.')) return;
+      try { await DEL(`/api/courses/${c.id}`); closeModal(); toast('Course deleted'); location.hash = '#/courses'; } catch (err) { fail(err); }
+    };
   }));
 }
 
