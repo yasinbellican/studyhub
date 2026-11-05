@@ -22,6 +22,17 @@ app.use(express.json({ limit: '4mb' }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/healthz', (req, res) => res.send('ok'));
+// Database connection check — shows which database address is configured (never the token)
+app.get('/healthz/db', async (req, res) => {
+  const raw = process.env.TURSO_DATABASE_URL;
+  const info = {
+    database: raw ? 'turso' : 'local file',
+    url: raw ? JSON.stringify(raw.replace(/\?.*$/, '')) : null, // quoted so stray spaces/quotes are visible
+    token_set: !!process.env.TURSO_AUTH_TOKEN,
+  };
+  try { await db.get('SELECT 1 AS ok'); res.json({ ...info, ok: true }); }
+  catch (e) { res.status(500).json({ ...info, ok: false, error: e.message, cause: e.cause?.message || e.cause?.code || null }); }
+});
 
 // ---------- helpers ----------
 const nul = (v) => (v === undefined || v === '' ? null : v);
