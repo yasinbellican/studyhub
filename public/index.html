@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>StudyHub</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div id="auth" class="auth hidden"></div>
+
+  <div id="shell" class="shell hidden">
+    <aside class="sidebar">
+      <div class="brand">📚 StudyHub</div>
+      <nav id="nav">
+        <a href="#/dashboard" data-route="dashboard">🏠 Dashboard</a>
+        <a href="#/tasks" data-route="tasks">📝 Assignments & Quizzes</a>
+        <a href="#/materials" data-route="materials">📄 Study Sheets</a>
+        <a href="#/practice" data-route="practice">🎯 Practice MCQs</a>
+        <a href="#/questions" data-route="questions">🗂️ Question Bank</a>
+        <a href="#/planner" data-route="planner">📅 Planner</a>
+        <a href="#/focus" data-route="focus">⏱️ Focus Timer</a>
+        <a href="#/courses" data-route="courses">🎓 Courses</a>
+      </nav>
+      <div class="sidebar-foot">
+        <div id="timer-mini" class="timer-mini hidden"></div>
+        <div id="me" class="me"></div>
+        <button id="logout" class="btn ghost small">Sign out</button>
+      </div>
+    </aside>
+    <main id="view" class="view"></main>
+  </div>
+
+  <div id="modal" class="modal hidden"><div class="modal-card" id="modal-card"></div></div>
+  <div id="toast" class="toast hidden"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
