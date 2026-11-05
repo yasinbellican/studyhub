@@ -62,18 +62,37 @@ async function startSession(res, userId) {
 }
 async function auth(req, res, next) {
   const token = req.cookies.sid;
-  const row = token && await db.get(`SELECT u.id, u.name, u.email, u.role, u.section_id, s.name AS section_name
+  const row = token && await db.get(`SELECT u.id, u.name, u.email, u.role, u.section_id, u.permissions, s.name AS section_name
     FROM sessions x JOIN users u ON u.id = x.user_id LEFT JOIN sections s ON s.id = u.section_id
     WHERE x.token = ? AND x.expires_at > ?`, token, nowISO());
   if (!row) return res.status(401).json({ error: 'Not signed in' });
+  row.perms = effectivePerms(row);
+  delete row.permissions;
   req.user = row;
   next();
 }
 function admin(req, res, next) {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only class reps/admins can do this' });
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only admins can do this' });
   next();
 }
 const A = [auth, admin];
+
+// ---------- permissions ----------
+// Admins manage the class (members, sections, invite code, permissions) and can do everything.
+// Other members only get the abilities an admin has ticked for them on the Permissions page.
+const PERMISSIONS = {
+  sheets: 'Upload & delete study sheets',
+  questions: 'Write, edit & AI-generate MCQs',
+  tasks: 'Add & edit assignments, quizzes & exams',
+  courses: 'Add & edit courses',
+};
+function parsePerms(raw) {
+  try { return JSON.parse(raw || '[]').filter((p) => p in PERMISSIONS); } catch { return []; }
+}
+function effectivePerms(u) { return u.role === 'admin' ? Object.keys(PERMISSIONS) : parsePerms(u.permissions); }
+// route guard: signed in + has this permission
+const can = (perm) => [auth, (req, res, next) => (req.user.perms.includes(perm) ? next()
+  : res.status(403).json({ error: `You don't have the “${PERMISSIONS[perm]}” permission. Ask an admin.` }))];
 async function checkCourse(courseId) {
   if (courseId == null || courseId === '') return null;
   const c = await db.get('SELECT id FROM courses WHERE id = ?', Number(courseId));
@@ -170,8 +189,10 @@ app.get('/api/admin/class', ...A, async (req, res) => {
     invite_code: await getSetting('invite_code'),
     sections: await db.all(`SELECT s.id, s.name, (SELECT COUNT(*) FROM users u WHERE u.section_id = s.id) AS members
       FROM sections s ORDER BY s.name`),
-    members: await db.all(`SELECT u.id, u.name, u.email, u.role, u.section_id, s.name AS section_name, u.created_at
-      FROM users u LEFT JOIN sections s ON s.id = u.section_id ORDER BY u.role, u.name`),
+    members: (await db.all(`SELECT u.id, u.name, u.email, u.role, u.section_id, u.permissions, s.name AS section_name, u.created_at
+      FROM users u LEFT JOIN sections s ON s.id = u.section_id ORDER BY u.role, u.name`))
+      .map(({ permissions, ...m }) => ({ ...m, permissions: parsePerms(permissions), perms: effectivePerms({ ...m, permissions }) })),
+    permission_list: PERMISSIONS,
   });
 });
 app.put('/api/admin/class', ...A, async (req, res) => {
@@ -212,6 +233,10 @@ app.patch('/api/admin/members/:id', ...A, async (req, res) => {
     if (m.role === 'admin' && req.body.role !== 'admin' && admins <= 1) return res.status(400).json({ error: 'The class needs at least one admin' });
     await db.run('UPDATE users SET role = ? WHERE id = ?', req.body.role, m.id);
   }
+  if (Array.isArray(req.body.permissions)) {
+    const perms = [...new Set(req.body.permissions.filter((p) => p in PERMISSIONS))];
+    await db.run('UPDATE users SET permissions = ? WHERE id = ?', JSON.stringify(perms), m.id);
+  }
   if (req.body.section_id !== undefined) await db.run('UPDATE users SET section_id = ? WHERE id = ?', await checkSection(req.body.section_id), m.id);
   res.json({ ok: true });
 });
@@ -226,16 +251,16 @@ app.delete('/api/admin/members/:id', ...A, async (req, res) => {
 
 // ---------- courses ----------
 app.get('/api/courses', auth, async (req, res) => res.json(await db.all('SELECT * FROM courses ORDER BY name')));
-app.post('/api/courses', ...A, async (req, res) => {
+app.post('/api/courses', ...can('courses'), async (req, res) => {
   if (!req.body.name) return res.status(400).json({ error: 'Name required' });
   const r = await db.run('INSERT INTO courses (name, color) VALUES (?, ?)', req.body.name, req.body.color || '#6366f1');
   res.json({ id: r.lastInsertRowid });
 });
-app.put('/api/courses/:id', ...A, async (req, res) => {
+app.put('/api/courses/:id', ...can('courses'), async (req, res) => {
   await db.run('UPDATE courses SET name = ?, color = ? WHERE id = ?', req.body.name, req.body.color, req.params.id);
   res.json({ ok: true });
 });
-app.delete('/api/courses/:id', ...A, async (req, res) => {
+app.delete('/api/courses/:id', ...can('courses'), async (req, res) => {
   const id = Number(req.params.id);
   await db.batch(['tasks', 'materials', 'questions', 'study_sessions', 'plan_items']
     .map((t) => [`UPDATE ${t} SET course_id = NULL WHERE course_id = ?`, id]).concat([['DELETE FROM courses WHERE id = ?', id]]));
@@ -245,7 +270,7 @@ app.delete('/api/courses/:id', ...A, async (req, res) => {
 // ---------- tasks (assignments / quizzes / exams) ----------
 app.get('/api/tasks', auth, async (req, res) => {
   const rows = await db.all(taskQuery() + ` ORDER BY (COALESCE(ut.status,'todo') = 'done'), COALESCE(td.due_at, t.due_at) IS NULL, COALESCE(td.due_at, t.due_at)`, tp(req));
-  if (req.user.role === 'admin') {
+  if (req.user.perms.includes('tasks')) {
     const dues = await db.all('SELECT task_id, section_id, due_at FROM task_due');
     for (const t of rows) t.section_dues = Object.fromEntries(dues.filter((d) => d.task_id === t.id).map((d) => [d.section_id, d.due_at]));
   }
@@ -260,19 +285,19 @@ async function taskFields(b) {
   if (!b.title) throw httpError(400, 'Title required');
   return [b.title, b.type || 'assignment', nul(b.due_at), b.priority || 'medium', b.notes || '', nul(b.max_grade), await checkCourse(b.course_id)];
 }
-app.post('/api/tasks', ...A, async (req, res) => {
+app.post('/api/tasks', ...can('tasks'), async (req, res) => {
   const r = await db.run(`INSERT INTO tasks (title, type, due_at, priority, notes, max_grade, course_id, created_by)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, ...(await taskFields(req.body)), req.user.id);
   await saveSectionDues(r.lastInsertRowid, req.body.section_dues);
   res.json({ id: r.lastInsertRowid });
 });
-app.put('/api/tasks/:id', ...A, async (req, res) => {
+app.put('/api/tasks/:id', ...can('tasks'), async (req, res) => {
   await db.run('UPDATE tasks SET title=?, type=?, due_at=?, priority=?, notes=?, max_grade=?, course_id=? WHERE id = ?',
     ...(await taskFields(req.body)), req.params.id);
   await saveSectionDues(Number(req.params.id), req.body.section_dues);
   res.json({ ok: true });
 });
-app.delete('/api/tasks/:id', ...A, async (req, res) => {
+app.delete('/api/tasks/:id', ...can('tasks'), async (req, res) => {
   const id = Number(req.params.id);
   await db.batch(['task_due', 'user_tasks', 'plan_items'].map((t) => [`DELETE FROM ${t} WHERE task_id = ?`, id]).concat([['DELETE FROM tasks WHERE id = ?', id]]));
   res.json({ ok: true });
@@ -318,7 +343,7 @@ app.get('/api/materials/:id/file', auth, async (req, res) => {
   if (!m || m.file_id == null) return res.status(404).end();
   res.set('Cache-Control', 'private, max-age=86400').type(m.mime).send(await db.readFile(m.file_id));
 });
-app.post('/api/materials', ...A, upload.single('file'), async (req, res) => {
+app.post('/api/materials', ...can('sheets'), upload.single('file'), async (req, res) => {
   const { title, course_id, body } = req.body;
   const courseId = await checkCourse(course_id);
   let kind = 'text', fileId = null, mime = null, text = body || '';
@@ -343,7 +368,7 @@ async function deleteQuestions(where, arg) {
   const list = ids.join(',');
   await db.batch([[`DELETE FROM progress WHERE question_id IN (${list})`], [`DELETE FROM reviews WHERE question_id IN (${list})`], [`DELETE FROM questions WHERE id IN (${list})`]]);
 }
-app.delete('/api/materials/:id', ...A, async (req, res) => {
+app.delete('/api/materials/:id', ...can('sheets'), async (req, res) => {
   const m = await db.get('SELECT * FROM materials WHERE id = ?', req.params.id);
   if (m) {
     await deleteQuestions('material_id = ?', m.id);
@@ -353,7 +378,7 @@ app.delete('/api/materials/:id', ...A, async (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/materials/:id/generate', ...A, async (req, res) => {
+app.post('/api/materials/:id/generate', ...can('questions'), async (req, res) => {
   const m = await db.get('SELECT * FROM materials WHERE id = ?', req.params.id);
   if (!m) return res.status(404).json({ error: 'Not found' });
   const count = Math.min(Math.max(parseInt(req.body.count) || 10, 1), 30);
@@ -371,7 +396,7 @@ app.post('/api/materials/:id/generate', ...A, async (req, res) => {
 const parseQ = (q) => ({ ...q, choices: JSON.parse(q.choices) });
 const MASTERED_REPS = 4;
 
-app.get('/api/questions', ...A, async (req, res) => {
+app.get('/api/questions', ...can('questions'), async (req, res) => {
   const where = ['1=1']; const args = [req.user.id];
   if (req.query.course_id) { where.push('q.course_id = ?'); args.push(Number(req.query.course_id)); }
   if (req.query.material_id) { where.push('q.material_id = ?'); args.push(Number(req.query.material_id)); }
@@ -387,20 +412,20 @@ function validQ(b) {
   if (!b.question || choices.length < 2 || !(ai >= 0 && ai < choices.length)) throw httpError(400, 'A question needs text, at least 2 choices and a correct answer');
   return { choices, ai };
 }
-app.post('/api/questions', ...A, async (req, res) => {
+app.post('/api/questions', ...can('questions'), async (req, res) => {
   const b = req.body; const { choices, ai } = validQ(b);
   const r = await db.run(`INSERT INTO questions (course_id, material_id, topic, question, choices, answer_index, explanation, source, created_by)
     VALUES (?, ?, ?, ?, ?, ?, ?, 'manual', ?)`, await checkCourse(b.course_id), nul(b.material_id),
     b.topic || 'General', b.question, JSON.stringify(choices), ai, b.explanation || '', req.user.id);
   res.json({ id: r.lastInsertRowid });
 });
-app.put('/api/questions/:id', ...A, async (req, res) => {
+app.put('/api/questions/:id', ...can('questions'), async (req, res) => {
   const b = req.body; const { choices, ai } = validQ(b);
   await db.run('UPDATE questions SET course_id=?, topic=?, question=?, choices=?, answer_index=?, explanation=? WHERE id=?',
     await checkCourse(b.course_id), b.topic || 'General', b.question, JSON.stringify(choices), ai, b.explanation || '', req.params.id);
   res.json({ ok: true });
 });
-app.delete('/api/questions/:id', ...A, async (req, res) => {
+app.delete('/api/questions/:id', ...can('questions'), async (req, res) => {
   await deleteQuestions('id = ?', Number(req.params.id));
   res.json({ ok: true });
 });

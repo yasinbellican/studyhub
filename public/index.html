@@ -4,6 +4,14 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#1c1d3a" />
+  <meta name="description" content="Your class's study space: assignments, study sheets and MCQ practice." />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="StudyHub" />
   <title>StudyHub</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
@@ -29,10 +37,12 @@
         <a href="#/planner" data-route="planner">📅 Planner</a>
         <a href="#/focus" data-route="focus">⏱️ Focus Timer</a>
         <a href="#/courses" data-route="courses">🎓 Courses</a>
-        <a href="#/questions" data-route="questions" class="admin-only hidden">🗂️ Question Bank</a>
+        <a href="#/questions" data-route="questions" data-perm="questions" class="hidden">🗂️ Question Bank</a>
         <a href="#/class" data-route="class" class="admin-only hidden">⚙️ Class & Sections</a>
+        <a href="#/permissions" data-route="permissions" class="admin-only hidden">🔐 Permissions</a>
       </nav>
       <div class="sidebar-foot">
+        <button id="install-btn" class="btn soft small install-btn hidden">📲 Install app</button>
         <div id="timer-mini" class="timer-mini hidden"></div>
         <div id="me" class="me"></div>
         <button id="logout" class="btn ghost small">Sign out</button>

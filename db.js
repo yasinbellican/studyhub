@@ -123,7 +123,12 @@ const db = {
   async batch(stmts) {
     await client.batch(stmts.map(([sql, ...args]) => ({ sql, args: normArgs(args) })), 'write');
   },
-  init: () => client.executeMultiple(SCHEMA),
+  async init() {
+    await client.executeMultiple(SCHEMA);
+    // migrations for databases created by older versions
+    const cols = (await db.all('PRAGMA table_info(users)')).map((c) => c.name);
+    if (!cols.includes('permissions')) await db.run("ALTER TABLE users ADD COLUMN permissions TEXT NOT NULL DEFAULT '[]'");
+  },
 
   // ---- files, stored in 512 KB chunks ----
   CHUNK: 512 * 1024,

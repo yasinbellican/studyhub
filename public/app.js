@@ -62,6 +62,7 @@ const bar = (pct, cls = '') => `<div class="bar ${cls}"><span style="width:${Mat
 async function loadCourses() { COURSES = await GET('/api/courses'); }
 
 const isAdmin = () => ME?.role === 'admin';
+const can = (perm) => !!ME?.perms?.includes(perm);
 
 // ---------- auth: set up class (first user), join with invite code, or sign in ----------
 async function showAuth(mode) {
@@ -128,6 +129,7 @@ async function boot() {
     <a href="#" id="my-section" style="color:#cfd2ef">${esc(ME.section_name || 'No section')} · change</a>`;
   $('#my-section').onclick = (e) => { e.preventDefault(); sectionDialog(); };
   $$('.admin-only').forEach((el) => el.classList.toggle('hidden', !isAdmin()));
+  $$('[data-perm]').forEach((el) => el.classList.toggle('hidden', !can(el.dataset.perm)));
   await loadCourses();
   startReminders();
   route();
@@ -146,12 +148,13 @@ async function sectionDialog() {
 }
 
 // ---------- router ----------
-const routes = { dashboard, tasks, materials, practice, questions, planner, focus, courses, class: classPage };
-const adminRoutes = ['questions', 'class'];
+const routes = { dashboard, tasks, materials, practice, questions, planner, focus, courses, class: classPage, permissions: permissionsPage };
+const adminRoutes = ['class', 'permissions'];
 async function route() {
   if (!ME) return;
   let [name, ...args] = (location.hash.replace(/^#\/?/, '').split('?')[0] || 'dashboard').split('/');
   if (adminRoutes.includes(name) && !isAdmin()) name = 'dashboard';
+  if (name === 'questions' && !can('questions')) name = 'dashboard';
   const fn = routes[name] || dashboard;
   const active = routes[name] ? name : 'dashboard';
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.route === active));
@@ -192,6 +195,10 @@ async function dashboard() {
     <div class="page-head"><div><h1>Hi ${esc(ME.name.split(' ')[0])} 👋</h1>
       <div class="muted">${new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</div></div>
       <div class="row">${notifBtn}<a class="btn" href="#/practice">🎯 Start practising</a></div></div>
+    <div id="install-card" class="card install-card hidden"><div class="row spread">
+      <div class="row" style="flex-wrap:nowrap"><img src="/icons/icon-192.png" alt="" width="44" height="44" style="border-radius:10px">
+        <div><b>Install StudyHub</b><div class="small muted">Get it on your home screen or desktop. Opens in its own window, no browser bar.</div></div></div>
+      <div class="row"><button class="btn small" id="install-card-btn">📲 Install</button><button class="btn ghost small" id="install-card-x">Not now</button></div></div></div>
     ${d.overdue.length ? `<div class="banner red">⚠️ You have <b>${d.overdue.length}</b> overdue item${d.overdue.length > 1 ? 's' : ''}: ${d.overdue.map((t) => esc(t.title)).join(', ')}</div>` : ''}
     ${d.due_soon_count ? `<div class="banner">⏰ <b>${d.due_soon_count}</b> item${d.due_soon_count > 1 ? 's are' : ' is'} due in the next 3 days.</div>` : ''}
     <div class="stats">
@@ -209,7 +216,7 @@ async function dashboard() {
       <div class="card"><h2>Mastery by course</h2>
         ${mastery.length ? mastery.map((c) => `<div style="margin-bottom:12px"><div class="row spread small"><span>${courseTag(c.course_name, c.color || '#999')}</span>
           <span><b>${c.mastery}%</b> <span class="muted">· ${c.mastered}/${c.total} mastered</span></span></div>${bar(c.mastery)}</div>`).join('')
-          : `<div class="empty">No questions yet.${isAdmin() ? ' Upload a study sheet and generate MCQs.' : ' Your class reps will add them.'}</div>`}</div>
+          : `<div class="empty">No questions yet.${can('sheets') || can('questions') ? ' Upload a study sheet and generate MCQs.' : ' Your class reps will add them.'}</div>`}</div>
       <div class="card"><h2>Weak spots</h2>
         ${weak.length ? `<div class="list">${weak.map((t) => `<div class="row spread"><div><b>${esc(t.topic)}</b> <span class="muted small">${esc(t.course)}</span><br>
           <span class="small muted">Mastery ${t.mastery}%${t.accuracy !== null ? ` · accuracy ${t.accuracy}%` : ''} · ${t.total} questions</span></div>
@@ -219,6 +226,9 @@ async function dashboard() {
       </div>
     </div>`;
   bindPlanRows($('#today-plan'), dashboard);
+  $('#install-card-btn').onclick = installApp;
+  $('#install-card-x').onclick = () => { localStorage.setItem('installCardHidden', '1'); refreshInstallUI(); };
+  refreshInstallUI();
   $('#notif')?.addEventListener('click', async () => { await Notification.requestPermission(); dashboard(); });
 }
 const taskRowSimple = (t) => `<div class="row" style="gap:10px"><span class="badge ${t.type}">${t.type}</span>
@@ -243,7 +253,7 @@ async function tasks() {
     (!taskFilter.type || t.type === taskFilter.type) && (!taskFilter.course || String(t.course_id) === taskFilter.course));
   view.innerHTML = `
     <div class="page-head"><div><h1>Assignments & Quizzes</h1><div class="muted">Due dates shown for <b>${esc(ME.section_name || 'your section')}</b>. Your status and grades are private to you.</div></div>
-      ${isAdmin() ? '<button class="btn" id="add">+ Add item</button>' : ''}</div>
+      ${can('tasks') ? '<button class="btn" id="add">+ Add item</button>' : ''}</div>
     <div class="tabs">${['open', 'done', 'all'].map((s) => `<button data-s="${s}" class="${taskFilter.status === s ? 'active' : ''}">${{ open: 'To do', done: 'Done', all: 'All' }[s]}</button>`).join('')}</div>
     <div class="filters">
       <select id="f-type"><option value="">All types</option>${['assignment', 'quiz', 'exam'].map((t) => `<option ${taskFilter.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
@@ -269,7 +279,7 @@ const taskRow = (t) => `<div class="item ${t.status === 'done' ? 'done' : ''}">
   <select data-status="${t.id}" style="width:auto">${['todo', 'doing', 'done'].map((s) => `<option value="${s}" ${t.status === s ? 'selected' : ''}>${{ todo: 'To do', doing: 'In progress', done: 'Done' }[s]}</option>`).join('')}</select>
   ${t.due_at && t.status !== 'done' ? `<button class="btn soft small" data-plan-task="${t.id}" title="Spread study sessions until the due date">📅 Plan</button>` : ''}
   <button class="btn ghost small" data-grade="${t.id}" title="Enter the grade you got">My grade</button>
-  ${isAdmin() ? `<button class="btn ghost small" data-edit="${t.id}">Edit</button>
+  ${can('tasks') ? `<button class="btn ghost small" data-edit="${t.id}">Edit</button>
   <button class="btn danger small" data-del="${t.id}">✕</button>` : ''}</div>`;
 
 function gradeDialog(t) {
@@ -331,16 +341,16 @@ async function materials(id) {
   const list = await GET('/api/materials');
   view.innerHTML = `
     <div class="page-head"><div><h1>Study Sheets</h1><div class="muted">The class's shared sheets — read them, then practise their MCQs until you master them.</div></div>
-      ${isAdmin() ? '<button class="btn" id="add">+ Add sheet</button>' : ''}</div>
+      ${can('sheets') ? '<button class="btn" id="add">+ Add sheet</button>' : ''}</div>
     <div class="grid g3">${list.length ? list.map((m) => `<div class="card">
       <div class="row spread"><span class="badge gray">${m.kind.toUpperCase()}</span>${courseTag(m.course_name, m.course_color)}</div>
       <h3 style="margin-top:10px">${esc(m.title)}</h3>
       <div class="small muted">${m.question_count} questions · added ${new Date(m.created_at.replace(' ', 'T') + 'Z').toLocaleDateString()}</div>
       <div class="row" style="margin-top:12px"><a class="btn small" href="#/materials/${m.id}">📖 Open</a>
         ${m.question_count ? `<a class="btn soft small" href="#/practice?material_id=${m.id}">🎯 Practice</a>` : ''}
-        ${isAdmin() ? `<button class="btn danger small" data-del="${m.id}">✕</button>` : ''}</div>
+        ${can('sheets') ? `<button class="btn danger small" data-del="${m.id}">✕</button>` : ''}</div>
       ${m.question_count ? `<div class="small muted" style="margin-top:10px">You've mastered ${m.mastered}/${m.question_count}</div>${bar((m.mastered / m.question_count) * 100, 'green')}` : ''}</div>`).join('')
-      : `<div class="card empty" style="grid-column:1/-1">No study sheets yet.${isAdmin() ? ' Click “Add sheet” to upload the first one for the class.' : ' Your class reps will add them here.'}</div>`}</div>`;
+      : `<div class="card empty" style="grid-column:1/-1">No study sheets yet.${can('sheets') ? ' Click “Add sheet” to upload the first one for the class.' : ' Your class reps will add them here.'}</div>`}</div>`;
   $('#add')?.addEventListener('click', materialForm);
   $$('[data-del]').forEach((b) => (b.onclick = async () => {
     if (confirm('Delete this sheet and all questions generated from it?')) { await DEL(`/api/materials/${b.dataset.del}`); materials(); }
@@ -380,8 +390,8 @@ async function materialReader(id) {
         <div class="card"><h3>🎯 Master this sheet</h3>
           <div class="small muted">${total} questions · you've mastered ${mastered}</div>${bar(total ? (mastered / total) * 100 : 0, 'green')}
           <div class="row" style="margin-top:12px">${total ? `<a class="btn" href="#/practice?material_id=${m.id}">Practice now</a>` : '<span class="small muted">No questions for this sheet yet.</span>'}
-            ${isAdmin() ? `<a class="btn ghost small" href="#/questions?material_id=${m.id}">Edit questions</a>` : ''}</div></div>
-        ${isAdmin() ? `<div class="card"><h3>✨ Generate MCQs with AI</h3>
+            ${can('questions') ? `<a class="btn ghost small" href="#/questions?material_id=${m.id}">Edit questions</a>` : ''}</div></div>
+        ${can('questions') ? `<div class="card"><h3>✨ Generate MCQs with AI</h3>
           ${ME.ai ? '' : '<div class="banner small">AI is not set up yet. Add <code>ANTHROPIC_API_KEY</code> to the <code>.env</code> file and restart the server.</div>'}
           <div class="form">
             <div class="two"><div><label>How many</label><input type="number" id="g-count" value="10" min="1" max="30"></div>
@@ -392,7 +402,7 @@ async function materialReader(id) {
           </div></div>
         <div class="card"><h3>✍️ Add your own</h3><button class="btn soft small" id="manual">+ Write a question</button></div>` : ''}
       </div></div>`;
-  if (!isAdmin()) return;
+  if (!can('questions')) return;
   $('#manual').onclick = () => questionForm({ material_id: m.id, course_id: m.course_id }, () => materialReader(id));
   $('#gen').onclick = async (e) => {
     const btn = e.target; btn.disabled = true; btn.textContent = 'Generating… (can take up to a minute)';
@@ -448,7 +458,7 @@ async function nextQuestion() {
   if (!r.question) {
     setKeys(null);
     if (!c.total) {
-      area.innerHTML = `<div class="card empty">No questions here yet.${isAdmin() ? '<br><br><a class="btn" href="#/materials">Upload a sheet & generate MCQs</a> <a class="btn ghost" href="#/questions">Write questions</a>' : '<br>Your class reps will add questions for this.'}</div>`;
+      area.innerHTML = `<div class="card empty">No questions here yet.${can('questions') ? '<br><br><a class="btn" href="#/materials">Upload a sheet & generate MCQs</a> <a class="btn ghost" href="#/questions">Write questions</a>' : '<br>Your class reps will add questions for this.'}</div>`;
     } else {
       area.innerHTML = `<div class="card empty"><h2>🎉 All caught up!</h2>
         <p>You've answered everything that's due.${r.next_due ? ` Next review: <b>${new Date(r.next_due).toLocaleString()}</b>.` : ''}</p>
@@ -682,17 +692,17 @@ async function courses() {
   const mOf = (id) => mastery.find((m) => m.course_id === id);
   view.innerHTML = `
     <div class="page-head"><div><h1>Courses</h1><div class="muted">Your mastery in each of the class's courses.</div></div></div>
-    ${isAdmin() ? `<form class="card row" id="cf" style="margin-bottom:16px;flex-wrap:nowrap">
+    ${can('courses') ? `<form class="card row" id="cf" style="margin-bottom:16px;flex-wrap:nowrap">
       <input name="name" required placeholder="New course name, e.g. Organic Chemistry">
       <input type="color" name="color" value="#5b5bd6" style="width:54px;padding:3px">
       <button class="btn">Add</button></form>` : ''}
     <div class="grid g3">${COURSES.map((c) => { const m = mOf(c.id); return `<div class="card">
       <div class="row spread"><div class="row"><span class="dot" style="background:${esc(c.color)};width:14px;height:14px"></span><h3 style="margin:0">${esc(c.name)}</h3></div>
-        ${isAdmin() ? `<button class="btn danger small" data-del="${c.id}">✕</button>` : ''}</div>
+        ${can('courses') ? `<button class="btn danger small" data-del="${c.id}">✕</button>` : ''}</div>
       <div class="small muted" style="margin:10px 0 4px">${m ? `Mastery ${m.mastery}% · ${m.mastered}/${m.total} questions mastered` : 'No questions yet'}</div>${bar(m?.mastery || 0)}
       <div class="row" style="margin-top:12px"><a class="btn soft small" href="#/practice?course_id=${c.id}">🎯 Practice</a>
-        ${isAdmin() ? `<a class="btn ghost small" href="#/questions?course_id=${c.id}">Questions</a>` : ''}</div></div>`; }).join('')
-      || `<div class="card empty" style="grid-column:1/-1">${isAdmin() ? 'Add the first course above.' : 'No courses yet.'}</div>`}</div>`;
+        ${can('questions') ? `<a class="btn ghost small" href="#/questions?course_id=${c.id}">Questions</a>` : ''}</div></div>`; }).join('')
+      || `<div class="card empty" style="grid-column:1/-1">${can('courses') ? 'Add the first course above.' : 'No courses yet.'}</div>`}</div>`;
   $('#cf')?.addEventListener('submit', async (e) => { e.preventDefault(); try { await POST('/api/courses', Object.fromEntries(new FormData(e.target))); await loadCourses(); courses(); } catch (err) { fail(err); } });
   $$('[data-del]').forEach((b) => (b.onclick = async () => {
     if (confirm('Delete this course? Tasks, sheets and questions stay, but lose their course.')) { await DEL(`/api/courses/${b.dataset.del}`); courses(); }
@@ -720,11 +730,10 @@ async function classPage() {
           <button class="btn danger small" data-sdel="${s.id}">✕</button></div>`).join('')}</div>
         <form class="row" id="sf" style="margin-top:10px;flex-wrap:nowrap"><input name="name" required placeholder="New section, e.g. Section 4"><button class="btn small">Add</button></form></div>
     </div>
-    <div class="card"><h2>Members (${c.members.length})</h2>
-      <div class="list">${c.members.map((m) => `<div class="row" style="border-bottom:1px solid var(--line);padding-bottom:8px">
-        <div style="flex:1;min-width:0"><b>${esc(m.name)}</b> ${m.id === ME.id ? '<span class="small muted">(you)</span>' : ''}<div class="small muted">${esc(m.email)}</div></div>
+    <div class="card"><div class="row spread"><h2 style="margin:0">Members (${c.members.length})</h2><a class="btn soft small" href="#/permissions">🔐 Roles & permissions →</a></div>
+      <div class="list" style="margin-top:12px">${c.members.map((m) => `<div class="row" style="border-bottom:1px solid var(--line);padding-bottom:8px">
+        <div style="flex:1;min-width:0"><b>${esc(m.name)}</b> ${m.id === ME.id ? '<span class="small muted">(you)</span>' : ''} ${m.role === 'admin' ? '<span class="badge">admin</span>' : ''}<div class="small muted">${esc(m.email)}</div></div>
         <select data-msec="${m.id}" style="width:auto">${secOpts(m.section_id)}</select>
-        <select data-mrole="${m.id}" style="width:auto"><option value="student" ${m.role === 'student' ? 'selected' : ''}>Student</option><option value="admin" ${m.role === 'admin' ? 'selected' : ''}>Admin / rep</option></select>
         ${m.id === ME.id ? '' : `<button class="btn danger small" data-mdel="${m.id}" title="Remove from class">✕</button>`}</div>`).join('')}</div></div>`;
   const run = async (p, msg) => { try { await p; if (msg) toast(msg); } catch (e) { fail(e); } classPage(); };
   $('#copy').onclick = () => navigator.clipboard.writeText(c.invite_code).then(() => toast('Code copied'));
@@ -734,8 +743,64 @@ async function classPage() {
   $$('[data-sname]').forEach((i) => (i.onchange = () => run(PUT(`/api/admin/sections/${i.dataset.sname}`, { name: i.value }), 'Renamed')));
   $$('[data-sdel]').forEach((b) => (b.onclick = () => confirm('Delete this section? Its members will need to pick a new one, and its due dates are removed.') && run(DEL(`/api/admin/sections/${b.dataset.sdel}`), 'Section deleted')));
   $$('[data-msec]').forEach((s) => (s.onchange = () => run(PATCH(`/api/admin/members/${s.dataset.msec}`, { section_id: s.value }), 'Section changed')));
-  $$('[data-mrole]').forEach((s) => (s.onchange = () => run(PATCH(`/api/admin/members/${s.dataset.mrole}`, { role: s.value }).then(() => s.dataset.mrole == ME.id && boot()), 'Role changed')));
   $$('[data-mdel]').forEach((b) => (b.onclick = () => confirm('Remove this member from the class? Their account and progress are deleted.') && run(DEL(`/api/admin/members/${b.dataset.mdel}`), 'Member removed')));
+}
+
+// =====================================================================
+// PERMISSIONS (admins only) — who can upload, add tasks, write questions…
+// =====================================================================
+const PERM_ICONS = { sheets: '📄', questions: '🗂️', tasks: '📝', courses: '🎓' };
+const PRESETS = {
+  student: { label: 'Student', perms: [] },
+  uploader: { label: 'Uploader', perms: ['sheets', 'questions'] },
+  editor: { label: 'Editor', perms: ['sheets', 'questions', 'tasks', 'courses'] },
+};
+let permFilter = '';
+async function permissionsPage() {
+  const c = await GET('/api/admin/class');
+  const keys = Object.keys(c.permission_list);
+  const q = permFilter.toLowerCase();
+  const members = c.members.filter((m) => !q || (m.name + ' ' + m.email + ' ' + (m.section_name || '')).toLowerCase().includes(q));
+  const counts = Object.fromEntries(keys.map((k) => [k, c.members.filter((m) => m.perms.includes(k)).length]));
+  view.innerHTML = `
+    <div class="page-head"><div><h1>Permissions</h1><div class="muted">Only admins see this page. Choose what each class member is allowed to do.</div></div></div>
+    <div class="card" style="margin-bottom:16px">
+      <h3>What each permission allows</h3>
+      <div class="perm-legend">${keys.map((k) => `<div><span class="perm-ico">${PERM_ICONS[k] || '•'}</span><b>${esc(c.permission_list[k])}</b> <span class="small muted">· ${counts[k]} member${counts[k] === 1 ? '' : 's'}</span></div>`).join('')}
+        <div><span class="perm-ico">⭐</span><b>Admin</b> <span class="small muted">— everything above, plus managing members, sections, the invite code and this page</span></div></div>
+      <div class="small muted" style="margin-top:10px">Everyone can always read sheets, practise MCQs, track their own tasks and use the planner.</div>
+    </div>
+    <div class="filters"><input id="pf-search" placeholder="Search members…" value="${esc(permFilter)}"></div>
+    <div class="list">${members.map((m) => {
+      const isMe = m.id === ME.id, adm = m.role === 'admin';
+      return `<div class="card perm-card">
+        <div class="row spread" style="align-items:flex-start">
+          <div style="min-width:0"><b>${esc(m.name)}</b> ${isMe ? '<span class="small muted">(you)</span>' : ''} ${adm ? '<span class="badge">⭐ admin</span>' : ''}
+            <div class="small muted">${esc(m.email)} · ${esc(m.section_name || 'No section')}</div></div>
+          <label class="switch-row"><input type="checkbox" class="check" data-admin="${m.id}" ${adm ? 'checked' : ''} ${isMe ? 'disabled title="You can\'t remove your own admin role"' : ''}> Admin</label>
+        </div>
+        <div class="perm-grid">${keys.map((k) => `<label class="perm-opt ${adm ? 'locked' : ''}">
+          <input type="checkbox" class="check" data-perm-user="${m.id}" data-perm-key="${k}" ${m.perms.includes(k) ? 'checked' : ''} ${adm ? 'disabled' : ''}>
+          <span>${PERM_ICONS[k] || ''} ${esc(c.permission_list[k])}</span></label>`).join('')}</div>
+        ${adm ? '<div class="small muted">Admins have every permission.</div>' : `<div class="row small" style="margin-top:8px">Quick set:
+          ${Object.entries(PRESETS).map(([id, p]) => `<button class="btn ghost small" data-preset="${id}" data-uid="${m.id}">${p.label}</button>`).join('')}</div>`}
+      </div>`; }).join('') || '<div class="empty">No members match.</div>'}</div>`;
+
+  const save = async (uid, body, msg) => {
+    try { await PATCH(`/api/admin/members/${uid}`, body); toast(msg); } catch (e) { fail(e); }
+    if (uid == ME.id) await boot(); else permissionsPage();
+  };
+  $('#pf-search').oninput = (e) => { permFilter = e.target.value; clearTimeout(permissionsPage.t); permissionsPage.t = setTimeout(async () => { await permissionsPage(); const i = $('#pf-search'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 250); };
+  $$('[data-perm-user]').forEach((cb) => (cb.onchange = () => {
+    const uid = cb.dataset.permUser;
+    const perms = $$(`[data-perm-user="${uid}"]`).filter((x) => x.checked).map((x) => x.dataset.permKey);
+    save(uid, { permissions: perms }, 'Permissions saved');
+  }));
+  $$('[data-preset]').forEach((b) => (b.onclick = () => save(b.dataset.uid, { permissions: PRESETS[b.dataset.preset].perms }, `Set to ${PRESETS[b.dataset.preset].label}`)));
+  $$('[data-admin]').forEach((cb) => (cb.onchange = () => {
+    if (cb.checked && !confirm('Make this member an admin? Admins can manage members, sections, the invite code and permissions.')) { cb.checked = false; return; }
+    save(cb.dataset.admin, { role: cb.checked ? 'admin' : 'student' }, cb.checked ? 'Now an admin' : 'Admin role removed');
+  }));
 }
 
 // =====================================================================
@@ -768,6 +833,41 @@ async function checkReminders() {
 }
 function startReminders() { stopReminders(); checkReminders(); remTimer = setInterval(checkReminders, 60000); }
 function stopReminders() { clearInterval(remTimer); }
+
+// =====================================================================
+// INSTALL AS AN APP (phones & computers)
+// =====================================================================
+let installPrompt = null;
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const canInstall = () => !isStandalone() && (installPrompt || isIOS());
+function refreshInstallUI() {
+  $('#install-btn').classList.toggle('hidden', !canInstall());
+  $('#install-card')?.classList.toggle('hidden', !canInstall() || localStorage.getItem('installCardHidden') === '1');
+}
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; refreshInstallUI(); });
+window.addEventListener('appinstalled', () => { installPrompt = null; refreshInstallUI(); toast('StudyHub installed 🎉 Open it from your home screen or apps list.'); });
+
+async function installApp() {
+  if (installPrompt) {
+    installPrompt.prompt();
+    await installPrompt.userChoice.catch(() => {});
+    installPrompt = null; refreshInstallUI();
+    return;
+  }
+  // iPhone / iPad Safari has no install button — show the steps
+  openModal(`<h2>📲 Install StudyHub</h2>
+    <p class="muted">Add StudyHub to your home screen and it opens like a normal app.</p>
+    <ol class="install-steps">
+      <li>Open this page in <b>Safari</b>.</li>
+      <li>Tap the <b>Share</b> button <span class="kbd">⬆︎</span> (bottom of the screen, or top on iPad).</li>
+      <li>Scroll down and tap <b>Add to Home Screen</b> <span class="kbd">＋</span>.</li>
+      <li>Tap <b>Add</b>. StudyHub now appears on your home screen.</li>
+    </ol>
+    <div class="row" style="justify-content:flex-end"><button class="btn" onclick="closeModal()">Got it</button></div>`);
+}
+$('#install-btn').onclick = installApp;
+if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
 
 window.closeModal = closeModal;
 boot().then(() => { if (!ME) showAuth(); });

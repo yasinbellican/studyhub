@@ -216,3 +216,23 @@ img, iframe { max-width: 100%; }
 
 /* keyboard tips are useless on touch screens */
 @media (hover: none) { .kbd-tip { display: none; } }
+
+/* permissions page */
+.perm-legend { display: grid; gap: 8px; }
+.perm-ico { display: inline-block; width: 24px; }
+.perm-card { padding: 14px 16px; }
+.perm-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 6px; margin-top: 12px; }
+.perm-opt { display: flex; align-items: center; gap: 8px; margin: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); font-weight: 500; font-size: 14px; cursor: pointer; }
+.perm-opt:has(input:checked) { border-color: var(--primary); background: var(--primary-soft); }
+.perm-opt.locked { opacity: .65; cursor: default; }
+.switch-row { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--text); font-weight: 600; white-space: nowrap; cursor: pointer; }
+
+/* install */
+.install-card { margin-bottom: 14px; border: 1px solid var(--primary-soft); }
+.install-steps { padding-left: 20px; line-height: 1.9; }
+.kbd { display: inline-block; padding: 0 6px; border: 1px solid var(--line); border-radius: 6px; background: #f6f7fb; }
+.install-btn { width: 100%; justify-content: center; }
+/* when installed as an app: respect the phone's notch / status bar */
+@media (display-mode: standalone) {
+  .topbar { padding-top: env(safe-area-inset-top); height: calc(56px + env(safe-area-inset-top)); }
+}
