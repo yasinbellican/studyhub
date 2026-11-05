@@ -61,45 +61,97 @@ const courseTag = (name, color) => (name ? `<span class="row small" style="gap:5
 const bar = (pct, cls = '') => `<div class="bar ${cls}"><span style="width:${Math.max(0, Math.min(100, pct || 0))}%"></span></div>`;
 async function loadCourses() { COURSES = await GET('/api/courses'); }
 
-// ---------- auth ----------
-function showAuth(mode = 'login') {
+const isAdmin = () => ME?.role === 'admin';
+
+// ---------- auth: set up class (first user), join with invite code, or sign in ----------
+async function showAuth(mode) {
   $('#shell').classList.add('hidden');
   const a = $('#auth'); a.classList.remove('hidden');
-  const reg = mode === 'register';
-  a.innerHTML = `<div class="card">
-    <h1>📚 StudyHub</h1>
-    <p class="muted">${reg ? 'Create your student account' : 'Sign in to your study space'}</p>
-    <form class="form" id="auth-form">
-      ${reg ? '<div><label>Name</label><input name="name" required autocomplete="name"></div>' : ''}
-      <div><label>Email</label><input name="email" type="email" required autocomplete="email"></div>
-      <div><label>Password</label><input name="password" type="password" required minlength="6" autocomplete="${reg ? 'new-password' : 'current-password'}"></div>
-      <button class="btn big">${reg ? 'Create account' : 'Sign in'}</button>
-      <p class="small muted" style="text-align:center;margin:0">${reg ? 'Already have an account?' : 'New here?'}
-        <a href="#" id="auth-switch">${reg ? 'Sign in' : 'Create an account'}</a></p>
-    </form></div>`;
-  $('#auth-switch').onclick = (e) => { e.preventDefault(); showAuth(reg ? 'login' : 'register'); };
-  $('#auth-form').onsubmit = async (e) => {
-    e.preventDefault();
-    try { await POST(reg ? '/api/register' : '/api/login', Object.fromEntries(new FormData(e.target))); await boot(); }
-    catch (err) { fail(err); }
-  };
+  const status = await fetch('/api/class/status').then((r) => r.json()).catch(() => ({ setup_done: true }));
+  if (!status.setup_done) mode = 'setup';
+  mode = mode || 'login';
+  const head = (sub) => `<h1>📚 StudyHub</h1><p class="muted">${sub}</p>`;
+  const creds = (newPw) => `<div><label>Email</label><input name="email" type="email" required autocomplete="email"></div>
+    <div><label>Password</label><input name="password" type="password" required minlength="6" autocomplete="${newPw ? 'new-password' : 'current-password'}"></div>`;
+  const submit = async (url, body) => { try { await POST(url, body); await boot(); } catch (err) { fail(err); } };
+
+  if (mode === 'setup') {
+    a.innerHTML = `<div class="card">${head('Set up your class. You will be its first admin (class rep).')}
+      <form class="form" id="auth-form">
+        <div><label>Class name</label><input name="class_name" required placeholder="e.g. Computer Engineering — Year 2"></div>
+        <div><label>Sections (comma separated)</label><input name="sections" required placeholder="e.g. Section 1, Section 2, Section 3"></div>
+        <div><label>Your name</label><input name="name" required autocomplete="name"></div>${creds(true)}
+        <button class="btn big">Create class</button></form></div>`;
+    $('#auth-form').onsubmit = (e) => { e.preventDefault(); submit('/api/setup', Object.fromEntries(new FormData(e.target))); };
+    return;
+  }
+  if (mode === 'join') {
+    a.innerHTML = `<div class="card">${head(`Join ${esc(status.name || 'the class')}`)}
+      <form class="form" id="auth-form">
+        <div><label>Invite code (ask your class rep)</label><div class="row" style="flex-wrap:nowrap">
+          <input name="code" required placeholder="e.g. 9F3A1C0B" style="text-transform:uppercase"><button type="button" class="btn soft" id="check">Check</button></div></div>
+        <div id="join-rest" class="form hidden">
+          <div><label>Your section</label><select name="section_id" id="sec" required></select></div>
+          <div><label>Your name</label><input name="name" required autocomplete="name"></div>${creds(true)}
+          <button class="btn big">Join class</button></div>
+        <p class="small muted" style="text-align:center;margin:0">Already have an account? <a href="#" id="auth-switch">Sign in</a></p></form></div>`;
+    const check = async () => {
+      try {
+        const info = await GET('/api/class/join-info?code=' + encodeURIComponent($('[name=code]').value.trim()));
+        $('#sec').innerHTML = '<option value="">Choose…</option>' + info.sections.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+        $('#join-rest').classList.remove('hidden');
+      } catch (err) { fail(err); $('#join-rest').classList.add('hidden'); }
+    };
+    $('#check').onclick = check;
+    $('[name=code]').onchange = check;
+    $('#auth-switch').onclick = (e) => { e.preventDefault(); showAuth('login'); };
+    $('#auth-form').onsubmit = (e) => {
+      e.preventDefault();
+      if ($('#join-rest').classList.contains('hidden')) return check();
+      submit('/api/register', Object.fromEntries(new FormData(e.target)));
+    };
+    return;
+  }
+  a.innerHTML = `<div class="card">${head(`Sign in to ${esc(status.name || 'your class')}`)}
+    <form class="form" id="auth-form">${creds(false)}<button class="btn big">Sign in</button>
+      <p class="small muted" style="text-align:center;margin:0">New here? <a href="#" id="auth-switch">Join with an invite code</a></p></form></div>`;
+  $('#auth-switch').onclick = (e) => { e.preventDefault(); showAuth('join'); };
+  $('#auth-form').onsubmit = (e) => { e.preventDefault(); submit('/api/login', Object.fromEntries(new FormData(e.target))); };
 }
 $('#logout').onclick = async () => { await POST('/api/logout'); ME = null; stopReminders(); showAuth(); };
 
 async function boot() {
   try { ME = await GET('/api/me'); } catch { return; }
   $('#auth').classList.add('hidden'); $('#shell').classList.remove('hidden');
-  $('#me').innerHTML = `Signed in as <b>${esc(ME.name)}</b>`;
+  $('.brand').textContent = '📚 ' + (ME.class_name || 'StudyHub');
+  $('#me').innerHTML = `<b>${esc(ME.name)}</b>${isAdmin() ? ' <span class="badge">admin</span>' : ''}<br>
+    <a href="#" id="my-section" style="color:#cfd2ef">${esc(ME.section_name || 'No section')} · change</a>`;
+  $('#my-section').onclick = (e) => { e.preventDefault(); sectionDialog(); };
+  $$('.admin-only').forEach((el) => el.classList.toggle('hidden', !isAdmin()));
   await loadCourses();
   startReminders();
   route();
+  if (!ME.section_id) sectionDialog();
+}
+
+async function sectionDialog() {
+  const secs = await GET('/api/sections');
+  openModal(`<h2>Your section</h2><p class="muted">Due dates are shown for your section's timetable.</p>
+    <div class="form"><select id="sec-pick">${secs.map((s) => `<option value="${s.id}" ${s.id === ME.section_id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
+    <div class="row" style="justify-content:flex-end"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn" id="sec-save">Save</button></div></div>`, (m) => {
+    $('#sec-save', m).onclick = async () => {
+      try { await PATCH('/api/me/section', { section_id: $('#sec-pick', m).value }); closeModal(); toast('Section updated'); await boot(); } catch (e) { fail(e); }
+    };
+  });
 }
 
 // ---------- router ----------
-const routes = { dashboard, tasks, materials, practice, questions, planner, focus, courses };
+const routes = { dashboard, tasks, materials, practice, questions, planner, focus, courses, class: classPage };
+const adminRoutes = ['questions', 'class'];
 async function route() {
   if (!ME) return;
-  const [name, ...args] = (location.hash.replace(/^#\/?/, '').split('?')[0] || 'dashboard').split('/');
+  let [name, ...args] = (location.hash.replace(/^#\/?/, '').split('?')[0] || 'dashboard').split('/');
+  if (adminRoutes.includes(name) && !isAdmin()) name = 'dashboard';
   const fn = routes[name] || dashboard;
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.route === (routes[name] ? name : 'dashboard')));
   view.innerHTML = '<p class="muted">Loading…</p>';
@@ -139,7 +191,7 @@ async function dashboard() {
       <div class="card"><h2>Mastery by course</h2>
         ${mastery.length ? mastery.map((c) => `<div style="margin-bottom:12px"><div class="row spread small"><span>${courseTag(c.course_name, c.color || '#999')}</span>
           <span><b>${c.mastery}%</b> <span class="muted">· ${c.mastered}/${c.total} mastered</span></span></div>${bar(c.mastery)}</div>`).join('')
-          : '<div class="empty">No questions yet. Upload a study sheet and generate MCQs.</div>'}</div>
+          : `<div class="empty">No questions yet.${isAdmin() ? ' Upload a study sheet and generate MCQs.' : ' Your class reps will add them.'}</div>`}</div>
       <div class="card"><h2>Weak spots</h2>
         ${weak.length ? `<div class="list">${weak.map((t) => `<div class="row spread"><div><b>${esc(t.topic)}</b> <span class="muted small">${esc(t.course)}</span><br>
           <span class="small muted">Mastery ${t.mastery}%${t.accuracy !== null ? ` · accuracy ${t.accuracy}%` : ''} · ${t.total} questions</span></div>
@@ -172,8 +224,8 @@ async function tasks() {
     (taskFilter.status === 'all' || (taskFilter.status === 'open' ? t.status !== 'done' : t.status === 'done')) &&
     (!taskFilter.type || t.type === taskFilter.type) && (!taskFilter.course || String(t.course_id) === taskFilter.course));
   view.innerHTML = `
-    <div class="page-head"><div><h1>Assignments & Quizzes</h1><div class="muted">Track everything that's due.</div></div>
-      <button class="btn" id="add">+ Add item</button></div>
+    <div class="page-head"><div><h1>Assignments & Quizzes</h1><div class="muted">Due dates shown for <b>${esc(ME.section_name || 'your section')}</b>. Your status and grades are private to you.</div></div>
+      ${isAdmin() ? '<button class="btn" id="add">+ Add item</button>' : ''}</div>
     <div class="tabs">${['open', 'done', 'all'].map((s) => `<button data-s="${s}" class="${taskFilter.status === s ? 'active' : ''}">${{ open: 'To do', done: 'Done', all: 'All' }[s]}</button>`).join('')}</div>
     <div class="filters">
       <select id="f-type"><option value="">All types</option>${['assignment', 'quiz', 'exam'].map((t) => `<option ${taskFilter.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
@@ -183,8 +235,9 @@ async function tasks() {
   $$('.tabs button').forEach((b) => (b.onclick = () => { taskFilter.status = b.dataset.s; tasks(); }));
   $('#f-type').onchange = (e) => { taskFilter.type = e.target.value; tasks(); };
   $('#f-course').onchange = (e) => { taskFilter.course = e.target.value; tasks(); };
-  $('#add').onclick = () => taskForm();
-  $$('[data-status]').forEach((s) => (s.onchange = async () => { await PATCH(`/api/tasks/${s.dataset.status}/status`, { status: s.value }).catch(fail); tasks(); }));
+  $('#add')?.addEventListener('click', () => taskForm());
+  $$('[data-status]').forEach((s) => (s.onchange = async () => { await PATCH(`/api/tasks/${s.dataset.status}/mine`, { status: s.value }).catch(fail); tasks(); }));
+  $$('[data-grade]').forEach((b) => (b.onclick = () => gradeDialog(all.find((t) => t.id == b.dataset.grade))));
   $$('[data-edit]').forEach((b) => (b.onclick = () => taskForm(all.find((t) => t.id == b.dataset.edit))));
   $$('[data-del]').forEach((b) => (b.onclick = async () => { if (confirm('Delete this item?')) { await DEL(`/api/tasks/${b.dataset.del}`); tasks(); } }));
   $$('[data-plan-task]').forEach((b) => (b.onclick = () => planTaskDialog(all.find((t) => t.id == b.dataset.planTask))));
@@ -197,27 +250,45 @@ const taskRow = (t) => `<div class="item ${t.status === 'done' ? 'done' : ''}">
     ${t.notes ? `<div class="small muted">${esc(t.notes)}</div>` : ''}</div>
   <select data-status="${t.id}" style="width:auto">${['todo', 'doing', 'done'].map((s) => `<option value="${s}" ${t.status === s ? 'selected' : ''}>${{ todo: 'To do', doing: 'In progress', done: 'Done' }[s]}</option>`).join('')}</select>
   ${t.due_at && t.status !== 'done' ? `<button class="btn soft small" data-plan-task="${t.id}" title="Spread study sessions until the due date">📅 Plan</button>` : ''}
-  <button class="btn ghost small" data-edit="${t.id}">Edit</button>
-  <button class="btn danger small" data-del="${t.id}">✕</button></div>`;
+  <button class="btn ghost small" data-grade="${t.id}" title="Enter the grade you got">My grade</button>
+  ${isAdmin() ? `<button class="btn ghost small" data-edit="${t.id}">Edit</button>
+  <button class="btn danger small" data-del="${t.id}">✕</button>` : ''}</div>`;
 
-function taskForm(t = {}) {
-  openModal(`<h2>${t.id ? 'Edit' : 'Add'} item</h2>
+function gradeDialog(t) {
+  openModal(`<h2>My grade — ${esc(t.title)}</h2><p class="muted small">Only you can see this. It's used for your course averages.</p>
+    <form class="form" id="gf"><div class="two"><div><label>Grade</label><input type="number" step="any" name="grade" value="${t.grade ?? ''}"></div>
+      <div><label>Out of</label><input disabled value="${t.max_grade ?? '—'}"></div></div>
+      <div class="row" style="justify-content:flex-end"><button type="button" class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn">Save</button></div></form>`, (m) => {
+    $('#gf', m).onsubmit = async (e) => {
+      e.preventDefault();
+      try { await PATCH(`/api/tasks/${t.id}/mine`, { grade: e.target.grade.value }); closeModal(); toast('Saved'); route(); } catch (err) { fail(err); }
+    };
+  });
+}
+
+async function taskForm(t = {}) {
+  const secs = await GET('/api/sections');
+  const dues = t.section_dues || {};
+  openModal(`<h2>${t.id ? 'Edit' : 'Add'} shared item</h2>
     <form class="form" id="tf">
       <div><label>Title</label><input name="title" required value="${esc(t.title)}" placeholder="e.g. Physics Lab Report 3"></div>
       <div class="two"><div><label>Type</label><select name="type">${['assignment', 'quiz', 'exam'].map((x) => `<option ${t.type === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
         <div><label>Course</label><select name="course_id">${courseOpts(t.course_id)}</select></div></div>
-      <div class="two"><div><label>Due</label><input type="datetime-local" name="due_at" value="${toLocalInput(t.due_at)}"></div>
+      <div class="two"><div><label>Default due date</label><input type="datetime-local" name="due_at" value="${toLocalInput(t.default_due_at)}"></div>
         <div><label>Priority</label><select name="priority">${['low', 'medium', 'high'].map((x) => `<option ${(t.priority || 'medium') === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div></div>
+      <div><label>Due date per section (leave empty to use the default)</label>
+        ${secs.map((s) => `<div class="row" style="flex-wrap:nowrap;margin-bottom:6px"><span style="min-width:120px" class="small">${esc(s.name)}</span>
+          <input type="datetime-local" data-sec="${s.id}" value="${toLocalInput(dues[s.id])}"></div>`).join('')}</div>
       <div><label>Notes</label><textarea name="notes" placeholder="Chapters covered, requirements…">${esc(t.notes)}</textarea></div>
-      <div class="two"><div><label>Grade received (optional)</label><input type="number" step="any" name="grade" value="${t.grade ?? ''}"></div>
-        <div><label>Out of</label><input type="number" step="any" name="max_grade" value="${t.max_grade ?? ''}"></div></div>
+      <div><label>Graded out of (optional)</label><input type="number" step="any" name="max_grade" value="${t.max_grade ?? ''}"></div>
       <div class="row" style="justify-content:flex-end"><button type="button" class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn">Save</button></div>
     </form>`, (m) => {
     $('#tf', m).onsubmit = async (e) => {
       e.preventDefault();
       const b = Object.fromEntries(new FormData(e.target));
-      b.due_at = fromLocalInput(b.due_at); b.status = t.status || 'todo';
-      try { t.id ? await PUT(`/api/tasks/${t.id}`, b) : await POST('/api/tasks', b); closeModal(); toast('Saved'); route(); } catch (err) { fail(err); }
+      b.due_at = fromLocalInput(b.due_at);
+      b.section_dues = Object.fromEntries($$('[data-sec]', m).filter((i) => i.value).map((i) => [i.dataset.sec, fromLocalInput(i.value)]));
+      try { t.id ? await PUT(`/api/tasks/${t.id}`, b) : await POST('/api/tasks', b); closeModal(); toast('Saved for the whole class'); route(); } catch (err) { fail(err); }
     };
   });
 }
@@ -241,17 +312,18 @@ async function materials(id) {
   if (id) return materialReader(id);
   const list = await GET('/api/materials');
   view.innerHTML = `
-    <div class="page-head"><div><h1>Study Sheets</h1><div class="muted">Upload PDFs, photos of notes, or paste text — then read them or turn them into MCQs.</div></div>
-      <button class="btn" id="add">+ Add sheet</button></div>
+    <div class="page-head"><div><h1>Study Sheets</h1><div class="muted">The class's shared sheets — read them, then practise their MCQs until you master them.</div></div>
+      ${isAdmin() ? '<button class="btn" id="add">+ Add sheet</button>' : ''}</div>
     <div class="grid g3">${list.length ? list.map((m) => `<div class="card">
       <div class="row spread"><span class="badge gray">${m.kind.toUpperCase()}</span>${courseTag(m.course_name, m.course_color)}</div>
       <h3 style="margin-top:10px">${esc(m.title)}</h3>
       <div class="small muted">${m.question_count} questions · added ${new Date(m.created_at.replace(' ', 'T') + 'Z').toLocaleDateString()}</div>
       <div class="row" style="margin-top:12px"><a class="btn small" href="#/materials/${m.id}">📖 Open</a>
         ${m.question_count ? `<a class="btn soft small" href="#/practice?material_id=${m.id}">🎯 Practice</a>` : ''}
-        <button class="btn danger small" data-del="${m.id}">✕</button></div></div>`).join('')
-      : '<div class="card empty" style="grid-column:1/-1">No study sheets yet. Click “Add sheet” to upload your first one.</div>'}</div>`;
-  $('#add').onclick = materialForm;
+        ${isAdmin() ? `<button class="btn danger small" data-del="${m.id}">✕</button>` : ''}</div>
+      ${m.question_count ? `<div class="small muted" style="margin-top:10px">You've mastered ${m.mastered}/${m.question_count}</div>${bar((m.mastered / m.question_count) * 100, 'green')}` : ''}</div>`).join('')
+      : `<div class="card empty" style="grid-column:1/-1">No study sheets yet.${isAdmin() ? ' Click “Add sheet” to upload the first one for the class.' : ' Your class reps will add them here.'}</div>`}</div>`;
+  $('#add')?.addEventListener('click', materialForm);
   $$('[data-del]').forEach((b) => (b.onclick = async () => {
     if (confirm('Delete this sheet and all questions generated from it?')) { await DEL(`/api/materials/${b.dataset.del}`); materials(); }
   }));
@@ -277,20 +349,20 @@ function materialForm() {
 }
 
 async function materialReader(id) {
-  const [m, qs] = await Promise.all([GET(`/api/materials/${id}`), GET(`/api/questions?material_id=${id}`)]);
+  const m = await GET(`/api/materials/${id}`);
   const content = m.kind === 'pdf' ? `<iframe src="/api/materials/${m.id}/file"></iframe>`
     : m.kind === 'image' ? `<img src="/api/materials/${m.id}/file" alt="">` : `<div class="text">${esc(m.body)}</div>`;
-  const mastered = qs.filter((q) => q.reps >= 4).length;
+  const total = m.question_count, mastered = m.mastered;
   view.innerHTML = `
     <div class="page-head"><div><a href="#/materials" class="small">← All sheets</a><h1>${esc(m.title)}</h1></div></div>
     <div class="grid" style="grid-template-columns: minmax(0,1fr) 300px; align-items:start">
       <div class="reader card">${content}</div>
       <div class="grid">
         <div class="card"><h3>🎯 Master this sheet</h3>
-          <div class="small muted">${qs.length} questions · ${mastered} mastered</div>${bar(qs.length ? (mastered / qs.length) * 100 : 0, 'green')}
-          <div class="row" style="margin-top:12px">${qs.length ? `<a class="btn" href="#/practice?material_id=${m.id}">Practice now</a>` : ''}
-            <a class="btn ghost small" href="#/questions?material_id=${m.id}">View questions</a></div></div>
-        <div class="card"><h3>✨ Generate MCQs with AI</h3>
+          <div class="small muted">${total} questions · you've mastered ${mastered}</div>${bar(total ? (mastered / total) * 100 : 0, 'green')}
+          <div class="row" style="margin-top:12px">${total ? `<a class="btn" href="#/practice?material_id=${m.id}">Practice now</a>` : '<span class="small muted">No questions for this sheet yet.</span>'}
+            ${isAdmin() ? `<a class="btn ghost small" href="#/questions?material_id=${m.id}">Edit questions</a>` : ''}</div></div>
+        ${isAdmin() ? `<div class="card"><h3>✨ Generate MCQs with AI</h3>
           ${ME.ai ? '' : '<div class="banner small">AI is not set up yet. Add <code>ANTHROPIC_API_KEY</code> to the <code>.env</code> file and restart the server.</div>'}
           <div class="form">
             <div class="two"><div><label>How many</label><input type="number" id="g-count" value="10" min="1" max="30"></div>
@@ -299,8 +371,9 @@ async function materialReader(id) {
             <button class="btn" id="gen" ${ME.ai ? '' : 'disabled'}>Generate questions</button>
             <div class="small muted">New questions avoid repeating the ones you already have.</div>
           </div></div>
-        <div class="card"><h3>✍️ Add your own</h3><button class="btn soft small" id="manual">+ Write a question</button></div>
+        <div class="card"><h3>✍️ Add your own</h3><button class="btn soft small" id="manual">+ Write a question</button></div>` : ''}
       </div></div>`;
+  if (!isAdmin()) return;
   $('#manual').onclick = () => questionForm({ material_id: m.id, course_id: m.course_id }, () => materialReader(id));
   $('#gen').onclick = async (e) => {
     const btn = e.target; btn.disabled = true; btn.textContent = 'Generating… (can take up to a minute)';
@@ -319,8 +392,7 @@ let session = { answered: 0, correct: 0, seen: [] };
 
 async function practice() {
   const p = hashParams();
-  const [mats, qs] = await Promise.all([GET('/api/materials'), GET('/api/questions')]);
-  const topics = [...new Set(qs.filter((q) => !p.get('course_id') || String(q.course_id) === p.get('course_id')).map((q) => q.topic))].sort();
+  const [mats, topics] = await Promise.all([GET('/api/materials'), GET('/api/topics' + (p.get('course_id') ? `?course_id=${p.get('course_id')}` : ''))]);
   session = { answered: 0, correct: 0, seen: [] };
   const mode = p.get('mode') || 'scheduled';
   view.innerHTML = `<div class="practice">
@@ -357,7 +429,7 @@ async function nextQuestion() {
   if (!r.question) {
     setKeys(null);
     if (!c.total) {
-      area.innerHTML = `<div class="card empty">No questions here yet.<br><br><a class="btn" href="#/materials">Upload a sheet & generate MCQs</a> <a class="btn ghost" href="#/questions">Write questions</a></div>`;
+      area.innerHTML = `<div class="card empty">No questions here yet.${isAdmin() ? '<br><br><a class="btn" href="#/materials">Upload a sheet & generate MCQs</a> <a class="btn ghost" href="#/questions">Write questions</a>' : '<br>Your class reps will add questions for this.'}</div>`;
     } else {
       area.innerHTML = `<div class="card empty"><h2>🎉 All caught up!</h2>
         <p>You've answered everything that's due.${r.next_due ? ` Next review: <b>${new Date(r.next_due).toLocaleString()}</b>.` : ''}</p>
@@ -417,7 +489,6 @@ async function questions() {
         ${x.material_title ? `<span>📄 ${esc(x.material_title)}</span>` : ''} ${x.source === 'ai' ? '<span>✨ AI</span>' : ''}</div>
         <div class="small" style="margin-top:4px">Answer: <b>${esc(x.choices[x.answer_index])}</b></div></div>
       <button class="btn ghost small" data-edit="${x.id}">Edit</button>
-      <button class="btn ghost small" data-reset="${x.id}" title="Reset progress">↺</button>
       <button class="btn danger small" data-del="${x.id}">✕</button></div>`).join('') : '<div class="empty">No questions yet.</div>'}</div>`;
   const setP = (k, v) => { const n = hashParams(); v ? n.set(k, v) : n.delete(k); location.hash = '#/questions?' + n; };
   $('#q-course').onchange = (e) => setP('course_id', e.target.value);
@@ -425,7 +496,6 @@ async function questions() {
   $('#q-search').oninput = (e) => { const s = e.target.value.toLowerCase(); $$('#q-list .item').forEach((it) => it.classList.toggle('hidden', !it.dataset.text.includes(s))); };
   $('#add').onclick = () => questionForm({ material_id: p.get('material_id'), course_id: p.get('course_id') }, questions);
   $$('[data-edit]').forEach((b) => (b.onclick = () => questionForm(list.find((x) => x.id == b.dataset.edit), questions)));
-  $$('[data-reset]').forEach((b) => (b.onclick = async () => { await POST(`/api/questions/${b.dataset.reset}/reset`); toast('Progress reset'); questions(); }));
   $$('[data-del]').forEach((b) => (b.onclick = async () => { if (confirm('Delete this question?')) { await DEL(`/api/questions/${b.dataset.del}`); questions(); } }));
 }
 
@@ -588,21 +658,61 @@ async function courses() {
   const mastery = await GET('/api/mastery');
   const mOf = (id) => mastery.find((m) => m.course_id === id);
   view.innerHTML = `
-    <div class="page-head"><div><h1>Courses</h1><div class="muted">Organise tasks, sheets and questions by course.</div></div></div>
-    <form class="card row" id="cf" style="margin-bottom:16px;flex-wrap:nowrap">
+    <div class="page-head"><div><h1>Courses</h1><div class="muted">Your mastery in each of the class's courses.</div></div></div>
+    ${isAdmin() ? `<form class="card row" id="cf" style="margin-bottom:16px;flex-wrap:nowrap">
       <input name="name" required placeholder="New course name, e.g. Organic Chemistry">
       <input type="color" name="color" value="#5b5bd6" style="width:54px;padding:3px">
-      <button class="btn">Add</button></form>
+      <button class="btn">Add</button></form>` : ''}
     <div class="grid g3">${COURSES.map((c) => { const m = mOf(c.id); return `<div class="card">
       <div class="row spread"><div class="row"><span class="dot" style="background:${esc(c.color)};width:14px;height:14px"></span><h3 style="margin:0">${esc(c.name)}</h3></div>
-        <button class="btn danger small" data-del="${c.id}">✕</button></div>
+        ${isAdmin() ? `<button class="btn danger small" data-del="${c.id}">✕</button>` : ''}</div>
       <div class="small muted" style="margin:10px 0 4px">${m ? `Mastery ${m.mastery}% · ${m.mastered}/${m.total} questions mastered` : 'No questions yet'}</div>${bar(m?.mastery || 0)}
-      <div class="row" style="margin-top:12px"><a class="btn soft small" href="#/practice?course_id=${c.id}">🎯 Practice</a><a class="btn ghost small" href="#/questions?course_id=${c.id}">Questions</a></div></div>`; }).join('')
-      || '<div class="card empty" style="grid-column:1/-1">Add your first course above.</div>'}</div>`;
-  $('#cf').onsubmit = async (e) => { e.preventDefault(); try { await POST('/api/courses', Object.fromEntries(new FormData(e.target))); courses(); } catch (err) { fail(err); } };
+      <div class="row" style="margin-top:12px"><a class="btn soft small" href="#/practice?course_id=${c.id}">🎯 Practice</a>
+        ${isAdmin() ? `<a class="btn ghost small" href="#/questions?course_id=${c.id}">Questions</a>` : ''}</div></div>`; }).join('')
+      || `<div class="card empty" style="grid-column:1/-1">${isAdmin() ? 'Add the first course above.' : 'No courses yet.'}</div>`}</div>`;
+  $('#cf')?.addEventListener('submit', async (e) => { e.preventDefault(); try { await POST('/api/courses', Object.fromEntries(new FormData(e.target))); await loadCourses(); courses(); } catch (err) { fail(err); } });
   $$('[data-del]').forEach((b) => (b.onclick = async () => {
     if (confirm('Delete this course? Tasks, sheets and questions stay, but lose their course.')) { await DEL(`/api/courses/${b.dataset.del}`); courses(); }
   }));
+}
+
+// =====================================================================
+// CLASS & SECTIONS (admins)
+// =====================================================================
+async function classPage() {
+  const c = await GET('/api/admin/class');
+  const secOpts = (sel) => c.sections.map((s) => `<option value="${s.id}" ${s.id === sel ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
+  view.innerHTML = `
+    <div class="page-head"><div><h1>Class & Sections</h1><div class="muted">Manage the class, its sections and who can edit shared content.</div></div></div>
+    <div class="grid g2" style="margin-bottom:16px">
+      <div class="card"><h2>Invite classmates</h2>
+        <p class="small muted">Share this code. New students enter it on the sign-in page (“Join with an invite code”) and pick their section.</p>
+        <div class="row"><code style="font-size:24px;font-weight:800;letter-spacing:3px">${esc(c.invite_code)}</code>
+          <button class="btn soft small" id="copy">Copy</button><button class="btn ghost small" id="regen" title="Old code stops working">New code</button></div>
+        <h3 style="margin-top:18px">Class name</h3>
+        <form class="row" id="cn" style="flex-wrap:nowrap"><input name="name" value="${esc(c.name)}"><button class="btn small">Save</button></form></div>
+      <div class="card"><h2>Sections</h2>
+        <div class="list">${c.sections.map((s) => `<div class="row" style="flex-wrap:nowrap"><input value="${esc(s.name)}" data-sname="${s.id}">
+          <span class="small muted" style="white-space:nowrap">${s.members} members</span>
+          <button class="btn danger small" data-sdel="${s.id}">✕</button></div>`).join('')}</div>
+        <form class="row" id="sf" style="margin-top:10px;flex-wrap:nowrap"><input name="name" required placeholder="New section, e.g. Section 4"><button class="btn small">Add</button></form></div>
+    </div>
+    <div class="card"><h2>Members (${c.members.length})</h2>
+      <div class="list">${c.members.map((m) => `<div class="row" style="flex-wrap:nowrap;border-bottom:1px solid var(--line);padding-bottom:8px">
+        <div style="flex:1;min-width:0"><b>${esc(m.name)}</b> ${m.id === ME.id ? '<span class="small muted">(you)</span>' : ''}<div class="small muted">${esc(m.email)}</div></div>
+        <select data-msec="${m.id}" style="width:auto">${secOpts(m.section_id)}</select>
+        <select data-mrole="${m.id}" style="width:auto"><option value="student" ${m.role === 'student' ? 'selected' : ''}>Student</option><option value="admin" ${m.role === 'admin' ? 'selected' : ''}>Admin / rep</option></select>
+        ${m.id === ME.id ? '' : `<button class="btn danger small" data-mdel="${m.id}" title="Remove from class">✕</button>`}</div>`).join('')}</div></div>`;
+  const run = async (p, msg) => { try { await p; if (msg) toast(msg); } catch (e) { fail(e); } classPage(); };
+  $('#copy').onclick = () => navigator.clipboard.writeText(c.invite_code).then(() => toast('Code copied'));
+  $('#regen').onclick = () => confirm('Make a new invite code? The old one will stop working.') && run(POST('/api/admin/invite-code'), 'New code created');
+  $('#cn').onsubmit = (e) => { e.preventDefault(); run(PUT('/api/admin/class', { name: e.target.name.value }).then(boot), 'Saved'); };
+  $('#sf').onsubmit = (e) => { e.preventDefault(); run(POST('/api/admin/sections', { name: e.target.name.value }), 'Section added'); };
+  $$('[data-sname]').forEach((i) => (i.onchange = () => run(PUT(`/api/admin/sections/${i.dataset.sname}`, { name: i.value }), 'Renamed')));
+  $$('[data-sdel]').forEach((b) => (b.onclick = () => confirm('Delete this section? Its members will need to pick a new one, and its due dates are removed.') && run(DEL(`/api/admin/sections/${b.dataset.sdel}`), 'Section deleted')));
+  $$('[data-msec]').forEach((s) => (s.onchange = () => run(PATCH(`/api/admin/members/${s.dataset.msec}`, { section_id: s.value }), 'Section changed')));
+  $$('[data-mrole]').forEach((s) => (s.onchange = () => run(PATCH(`/api/admin/members/${s.dataset.mrole}`, { role: s.value }).then(() => s.dataset.mrole == ME.id && boot()), 'Role changed')));
+  $$('[data-mdel]').forEach((b) => (b.onclick = () => confirm('Remove this member from the class? Their account and progress are deleted.') && run(DEL(`/api/admin/members/${b.dataset.mdel}`), 'Member removed')));
 }
 
 // =====================================================================
