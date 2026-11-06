@@ -1,6 +1,7 @@
 // Notifications: stored in the database (shown in the app's bell / Notifications page)
 // and pushed to phones & computers that turned on notifications (works when the app is closed).
-let _wp; const webpush = () => (_wp ||= require('web-push')); // loaded only when push is used
+// web-push is an ES module: load it with import() (require() fails on some Node versions)
+let _wp; const webpush = async () => (_wp ||= await import('web-push').then((m) => m.default || m));
 const db = require('./db');
 
 // audience: 'all' | 'admins' | 'section' (target_id = section id) | 'user' (target_id = user id)
@@ -16,11 +17,11 @@ async function vapidKeys() {
   if (vapid) return vapid;
   let pub = await getSetting('vapid_public'), priv = await getSetting('vapid_private');
   if (!pub || !priv) {
-    const k = webpush().generateVAPIDKeys();
+    const k = (await webpush()).generateVAPIDKeys();
     await setSetting('vapid_public', k.publicKey); await setSetting('vapid_private', k.privateKey);
     pub = k.publicKey; priv = k.privateKey;
   }
-  webpush().setVapidDetails('mailto:noreply@e-just-study.app', pub, priv);
+  (await webpush()).setVapidDetails('mailto:noreply@e-just-study.app', pub, priv);
   vapid = { publicKey: pub };
   return vapid;
 }
@@ -31,7 +32,8 @@ async function sendPush(id, audience, targetId, payload) {
     JOIN (SELECT ? AS audience, ? AS target_id) n
     WHERE u.status = 'approved' AND ${VISIBLE}`, audience, targetId);
   const body = JSON.stringify({ ...payload, id });
-  await Promise.all(subs.map((s) => webpush().sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, body, { TTL: 24 * 3600 })
+  const wp = await webpush();
+  await Promise.all(subs.map((s) => wp.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, body, { TTL: 24 * 3600 })
     .catch((e) => { if (e.statusCode === 404 || e.statusCode === 410) return db.run('DELETE FROM push_subs WHERE endpoint = ?', s.endpoint); })));
 }
 

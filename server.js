@@ -42,7 +42,7 @@ app.get('/healthz/diag', async (req, res) => {
     database: { https: db.usingHttp, ready: await check(() => ready.then(() => 'ok')), query: await check(async () => (await db.get('SELECT 1 AS ok')).ok === 1 ? 'ok' : 'odd') },
     init_problems: db.initProblems,
     modules: {
-      'web-push': await check(() => { require('web-push'); }),
+      'web-push': await check(async () => { const m = await import('web-push'); if (!(m.default || m).sendNotification) throw new Error('loaded but sendNotification missing'); }),
       notify: await check(() => { N(); }),
       integrations: await check(() => { lazy.i ||= require('./integrations'); }),
     },
