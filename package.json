@@ -15,7 +15,6 @@
     "@libsql/client": "^0.18.0",
     "cookie-parser": "^1.4.7",
     "express": "^5.3.0",
-    "multer": "^2.5.0",
-    "web-push": "^4.0.0"
+    "multer": "^2.5.0"
   }
 }
