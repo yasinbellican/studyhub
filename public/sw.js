@@ -1,8 +1,8 @@
 // StudyHub service worker: makes the app installable and lets the app shell open
 // instantly (and offline). Class data always comes live from the server.
-const CACHE = 'ejust-shell-v2';
+const CACHE = 'ejust-shell-v3';
 const SHELL = ['/', '/index.html', '/app.js', '/styles.css', '/manifest.webmanifest',
-  '/icons/icon-192.png', '/icons/icon-512.png', '/icons/favicon-32.png', '/icons/apple-touch-icon.png'];
+  '/icons/icon-192.png', '/icons/icon-512.png', '/icons/favicon-32.png', '/icons/apple-touch-icon.png', '/icons/emblem-64.png', '/logo.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

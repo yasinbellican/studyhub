@@ -61,6 +61,7 @@ const courseTag = (name, color) => (name ? `<span class="row small" style="gap:5
 const bar = (pct, cls = '') => `<div class="bar ${cls}"><span style="width:${Math.max(0, Math.min(100, pct || 0))}%"></span></div>`;
 async function loadCourses() { COURSES = await GET('/api/courses'); }
 
+const BRAND = '<span class="brand-logo"><img src="/icons/emblem-64.png" alt=""></span>E-JUST';
 const isAdmin = () => ME?.role === 'admin';
 const can = (perm) => !!ME?.perms?.includes(perm);
 
@@ -71,7 +72,7 @@ async function showAuth(mode) {
   const status = await fetch('/api/class/status').then((r) => r.json()).catch(() => ({ setup_done: true }));
   if (!status.setup_done) mode = 'setup';
   mode = mode || 'login';
-  const head = (sub) => `<h1>📚 E-JUST</h1><p class="muted">${sub}</p>`;
+  const head = (sub) => `<img src="/logo.png" alt="E-JUST" class="auth-logo"><p class="muted" style="text-align:center">${sub}</p>`;
   const creds = (newPw) => `<div><label>Username</label><input name="username" required autocomplete="username" autocapitalize="none" spellcheck="false"
       ${newPw ? 'pattern="[A-Za-z0-9._\\-]{3,30}" title="3–30 characters: letters, numbers, dots, dashes or underscores (no spaces)" placeholder="e.g. ahmed.ali"' : ''}>
       ${newPw ? '<div class="small muted" style="margin-top:4px">3–30 characters, no spaces. You\'ll use it to sign in.</div>' : ''}</div>
@@ -137,7 +138,7 @@ $('#logout').onclick = async () => { await POST('/api/logout'); ME = null; stopR
 async function boot() {
   try { ME = await GET('/api/me'); } catch { return; }
   $('#auth').classList.add('hidden'); $('#shell').classList.remove('hidden');
-  $('.brand').innerHTML = '📚 E-JUST' + (ME.class_name ? `<div class="brand-sub">${esc(ME.class_name)}</div>` : '');
+  $('.brand').innerHTML = BRAND + (ME.class_name ? `<div class="brand-sub">${esc(ME.class_name)}</div>` : '');
   // only admins can change sections; students just see theirs
   $('#me').innerHTML = `<b>${esc(ME.name)}</b>${isAdmin() ? ' <span class="badge">admin</span>' : ''}<br>
     ${isAdmin() ? `<a href="#" id="my-section" style="color:#cfd2ef">${esc(ME.section_name || 'No section')} · change</a>`

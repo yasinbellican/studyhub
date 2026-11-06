@@ -258,3 +258,10 @@ img, iframe { max-width: 100%; }
 .requests-card { border-left: 4px solid var(--amber); }
 .request-row { border-bottom: 1px solid var(--line); padding-bottom: 8px; }
 .banner.hidden { display: none !important; }
+
+/* E-JUST logo */
+.auth-logo { display: block; height: 120px; width: auto; margin: 0 auto 8px; }
+.brand { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.brand-logo { display: inline-grid; place-items: center; width: 36px; height: 36px; border-radius: 9px; background: #fff; flex: none; }
+.brand-logo img { width: 30px; height: 30px; object-fit: contain; }
+.brand .brand-sub { flex-basis: 100%; margin-left: 46px; margin-top: -6px; }
