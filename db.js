@@ -11,9 +11,12 @@
 const { createClient } = require('@libsql/client');
 const path = require('path');
 
+// Online, talk to Turso over plain HTTPS (libsql:// would open a WebSocket, which is
+// less reliable on serverless hosts like Vercel).
+const DB_URL = (process.env.TURSO_DATABASE_URL || '').trim().replace(/^libsql:\/\//i, 'https://');
 const client = createClient({
-  url: process.env.TURSO_DATABASE_URL || 'file:' + path.join(__dirname, 'studyhub.db'),
-  authToken: process.env.TURSO_AUTH_TOKEN,
+  url: DB_URL || 'file:' + path.join(__dirname, 'studyhub.db'),
+  authToken: process.env.TURSO_AUTH_TOKEN?.trim(),
 });
 
 const SCHEMA = `
@@ -99,6 +102,22 @@ CREATE INDEX IF NOT EXISTS idx_progress_due ON progress(user_id, due_at);
 CREATE INDEX IF NOT EXISTS idx_reviews_user ON reviews(user_id, at);
 `;
 
+// Tables for the optional extras (notifications, push, reminders). Created separately so a
+// problem here can never stop the core app from starting.
+const EXTRA_TABLES = [
+  `CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    audience TEXT NOT NULL DEFAULT 'all',
+    target_id INTEGER,
+    kind TEXT NOT NULL DEFAULT 'info',
+    title TEXT NOT NULL, body TEXT DEFAULT '', url TEXT DEFAULT '#/dashboard',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+  `CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, user_id INTEGER NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+  `CREATE TABLE IF NOT EXISTS sent_once (key TEXT PRIMARY KEY, at TEXT NOT NULL DEFAULT (datetime('now')))`,
+  `CREATE INDEX IF NOT EXISTS idx_notif ON notifications(created_at)`,
+];
+const initProblems = []; // shown on /healthz/diag
+
 // Older versions signed in with email. Rebuild the users table with usernames
 // (taken from the part of the email before "@") and mark everyone already in
 // the class as approved. Runs once, inside one transaction.
@@ -154,7 +173,21 @@ const db = {
     // migrations for databases created by older versions
     const cols = (await db.all('PRAGMA table_info(users)')).map((c) => c.name);
     if (!cols.includes('username')) await migrateToUsernames(cols);
+    // extras — each step guarded; failures are recorded instead of breaking start-up
+    const step = async (name, fn) => { try { await fn(); } catch (e) { initProblems.push(`${name}: ${e.message}`); console.error('init step failed', name, e); } };
+    for (const sql of EXTRA_TABLES) await step(sql.slice(0, 60), () => client.execute(sql));
+    await step('users.notif_seen_at', async () => {
+      const c = (await db.all('PRAGMA table_info(users)')).map((x) => x.name);
+      if (!c.includes('notif_seen_at')) await db.run('ALTER TABLE users ADD COLUMN notif_seen_at TEXT');
+    });
+    await step('tasks.source/external_id', async () => {
+      const c = (await db.all('PRAGMA table_info(tasks)')).map((x) => x.name);
+      if (!c.includes('source')) await db.run("ALTER TABLE tasks ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'");
+      if (!c.includes('external_id')) await db.run('ALTER TABLE tasks ADD COLUMN external_id TEXT');
+    });
   },
+  initProblems,
+  usingHttp: /^https:/.test(DB_URL),
 
   // ---- files, stored in 512 KB chunks ----
   CHUNK: 512 * 1024,

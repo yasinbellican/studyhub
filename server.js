@@ -5,6 +5,17 @@ const crypto = require('crypto');
 const path = require('path');
 const db = require('./db');
 const { generateMCQs, aiAvailable } = require('./ai');
+// Notifications, push, Moodle and Gmail are optional extras: they are loaded on first use and every
+// call is guarded, so a problem in them can never stop the rest of the site from working.
+const lazy = {};
+const N = () => (lazy.n ||= require('./notify'));
+const integrations = new Proxy({}, { get: (_, fn) => async (...args) => (lazy.i ||= require('./integrations'))[fn](...args) });
+async function notify(o) { try { return await N().notify(o); } catch (e) { console.error('notify failed:', e.message); } }
+const listFor = (u) => N().listFor(u);
+const vapidKeys = () => N().vapidKeys();
+// never let a stray async error crash the server process
+process.on('unhandledRejection', (e) => console.error('unhandledRejection:', e));
+process.on('uncaughtException', (e) => console.error('uncaughtException:', e));
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -22,6 +33,22 @@ app.use(express.json({ limit: '4mb' }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/healthz', (req, res) => res.send('ok'));
+// Self-check of every part, so problems online can be found without the host's logs (no secrets shown)
+app.get('/healthz/diag', async (req, res) => {
+  const check = async (fn) => { try { const v = await fn(); return v === undefined ? 'ok' : v; } catch (e) { return 'ERROR: ' + e.message; } };
+  res.json({
+    node: process.version,
+    vercel: !!process.env.VERCEL,
+    database: { https: db.usingHttp, ready: await check(() => ready.then(() => 'ok')), query: await check(async () => (await db.get('SELECT 1 AS ok')).ok === 1 ? 'ok' : 'odd') },
+    init_problems: db.initProblems,
+    modules: {
+      'web-push': await check(() => { require('web-push'); }),
+      notify: await check(() => { N(); }),
+      integrations: await check(() => { lazy.i ||= require('./integrations'); }),
+    },
+    tables: await check(async () => (await db.all("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('notifications','push_subs','sent_once')")).map((r) => r.name).join(',')),
+  });
+});
 // Database connection check — shows which database address is configured (never the token)
 app.get('/healthz/db', async (req, res) => {
   const raw = process.env.TURSO_DATABASE_URL;
@@ -168,6 +195,7 @@ app.post('/api/register', async (req, res) => {
   if (await usernameTaken(username)) return res.status(409).json({ error: 'That username is already taken — try another one' });
   await db.run("INSERT INTO users (name, username, pass_hash, status, section_id) VALUES (?, ?, ?, 'pending', ?)",
     name.trim(), username, hashPassword(password), sid);
+  await notify({ audience: 'admins', kind: 'join', title: `Join request: ${name.trim()}`, body: `@${username} wants to join. Approve or reject it in Class & Sections.`, url: '#/class' });
   res.json({ pending: true });
 });
 
@@ -243,6 +271,7 @@ app.post('/api/admin/members/:id/approve', ...A, async (req, res) => {
   if (!m) return res.status(404).json({ error: 'No pending request found' });
   const sid = req.body?.section_id ? await checkSection(req.body.section_id) : m.section_id;
   await db.run("UPDATE users SET status = 'approved', section_id = ? WHERE id = ?", sid, m.id);
+  await notify({ audience: 'user', targetId: m.id, kind: 'info', title: 'Welcome to the class!', body: 'Your join request was approved.', url: '#/dashboard' });
   res.json({ ok: true });
 });
 app.get('/api/admin/pending-count', ...A, async (req, res) => {
@@ -354,6 +383,9 @@ app.post('/api/tasks', ...can('tasks'), async (req, res) => {
   const r = await db.run(`INSERT INTO tasks (title, type, due_at, priority, notes, max_grade, course_id, created_by)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, ...(await taskFields(req.body, true)), req.user.id);
   await saveSectionDues(r.lastInsertRowid, req.body.section_dues);
+  const course = req.body.course_id ? (await db.get('SELECT name FROM courses WHERE id = ?', Number(req.body.course_id)))?.name : null;
+  await notify({ kind: 'task', title: `New ${req.body.type || 'assignment'}: ${req.body.title}`,
+    body: `${course ? course + ' · ' : ''}added by ${req.user.name}. Check your section's due date.`, url: req.body.course_id ? `#/courses/${req.body.course_id}` : '#/tasks' });
   res.json({ id: r.lastInsertRowid });
 });
 app.put('/api/tasks/:id', ...can('tasks'), async (req, res) => {
@@ -426,6 +458,7 @@ app.post('/api/materials', ...can('sheets'), upload.single('file'), async (req, 
   }
   const r = await db.run('INSERT INTO materials (course_id, title, kind, file_id, mime, body, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
     courseId, title || req.file?.originalname || 'Untitled notes', kind, fileId, mime, text, req.user.id);
+  await notify({ kind: 'sheet', title: `New study sheet: ${title || req.file?.originalname || 'Untitled notes'}`, body: `Added by ${req.user.name}.`, url: `#/materials/${r.lastInsertRowid}` });
   res.json({ id: r.lastInsertRowid });
 });
 async function deleteQuestions(where, arg) {
@@ -689,6 +722,77 @@ app.get('/api/reminders', auth, async (req, res) => {
     tp(req, { $soon: new Date(Date.now() + 86400000).toISOString() }))).map(({ id, title, type, due_at }) => ({ id, title, type, due_at }));
   const reviews = (await db.get('SELECT COUNT(*) AS n FROM progress WHERE user_id = ? AND due_at <= ?', req.user.id, nowISO())).n;
   res.json({ tasks, reviews_due: reviews });
+});
+
+// ---------- notifications ----------
+app.get('/api/notifications', auth, async (req, res) => res.json(await listFor(req.user)));
+app.post('/api/notifications/seen', auth, async (req, res) => {
+  await db.run("UPDATE users SET notif_seen_at = datetime('now') WHERE id = ?", req.user.id);
+  res.json({ ok: true });
+});
+// push notifications (phone / computer, works when the app is closed)
+app.get('/api/push/key', auth, async (req, res) => res.json({ key: (await vapidKeys()).publicKey }));
+app.post('/api/push/subscribe', auth, async (req, res) => {
+  const s = req.body || {};
+  if (!s.endpoint || !s.keys?.p256dh || !s.keys?.auth || !/^https:\/\//.test(s.endpoint)) return res.status(400).json({ error: 'Bad subscription' });
+  await db.run(`INSERT INTO push_subs (endpoint, user_id, p256dh, auth) VALUES (?, ?, ?, ?)
+    ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth`, s.endpoint, req.user.id, s.keys.p256dh, s.keys.auth);
+  res.json({ ok: true });
+});
+app.post('/api/push/unsubscribe', auth, async (req, res) => {
+  if (req.body?.endpoint) await db.run('DELETE FROM push_subs WHERE endpoint = ? AND user_id = ?', req.body.endpoint, req.user.id);
+  res.json({ ok: true });
+});
+app.post('/api/push/test', auth, async (req, res) => {
+  await notify({ audience: 'user', targetId: req.user.id, kind: 'info', title: 'Notifications are working', body: 'You will get alerts for new assignments, deadlines and emails here.', url: '#/notifications' });
+  res.json({ ok: true });
+});
+
+// ---------- connections: Moodle + Gmail (admins) ----------
+const gs = getSetting, ss = setSetting;
+const baseUrl = (req) => `${req.protocol}://${req.get('host')}`;
+app.get('/api/admin/connections', ...A, async (req, res) => {
+  const url = await gs('moodle_ical_url');
+  const owner = Number(await gs('email_owner_id')) || null;
+  res.json({
+    moodle: { connected: !!url, url_hint: url ? url.replace(/(authtoken=)[^&]+/i, '$1•••••').slice(0, 120) : null,
+      last_sync: await gs('moodle_last_sync'), last_status: await gs('moodle_last_status') },
+    email: { hook_url: `${baseUrl(req)}/api/hooks/email`, secret: await integrations.hookSecret(), share: (await gs('email_share')) === 'all',
+      owner: owner ? (await db.get('SELECT name FROM users WHERE id = ?', owner))?.name : null, last: await gs('email_last') },
+    cron_url: `${baseUrl(req)}/api/cron`,
+  });
+});
+app.put('/api/admin/connections', ...A, async (req, res) => {
+  const b = req.body || {};
+  if ('moodle_ical_url' in b) {
+    const u = String(b.moodle_ical_url || '').trim();
+    // real Moodle links are https; plain http is only accepted for localhost (testing)
+    if (u && !/^https:\/\/.+/i.test(u) && !/^http:\/\/(localhost|127\.0\.0\.1)[:/]/i.test(u)) return res.status(400).json({ error: 'Paste the full https:// calendar link from Moodle' });
+    await ss('moodle_ical_url', u);
+    if (u) { await ss('moodle_last_sync', ''); }
+  }
+  if ('email_share' in b) await ss('email_share', b.email_share ? 'all' : 'owner');
+  if (b.claim_email) await ss('email_owner_id', String(req.user.id)); // email alerts go to this admin
+  res.json({ ok: true });
+});
+app.post('/api/admin/connections/moodle-sync', ...A, async (req, res) => res.json(await integrations.moodleSync({ force: true })));
+app.post('/api/admin/connections/new-secret', ...A, async (req, res) => {
+  await ss('hook_secret', ''); res.json({ secret: await integrations.hookSecret() });
+});
+
+// Called by the Google Apps Script in Gmail (every ~10 minutes) with new emails
+app.post('/api/hooks/email', async (req, res) => {
+  const key = req.get('x-ejust-key') || req.query.key;
+  if (!key || key !== (await integrations.hookSecret())) return res.status(403).json({ error: 'Bad key' });
+  const out = await integrations.receiveEmails(req.body?.messages || []);
+  await ss('email_last', new Date().toISOString());
+  let tick = null;
+  try { tick = await integrations.tick(); } catch (e) { tick = { error: e.message }; }
+  res.json({ ...out, tick });
+});
+// Scheduler: Vercel cron (daily) and the Gmail script call this. Safe to call any time (it throttles itself).
+app.all('/api/cron', async (req, res) => {
+  try { res.json(await integrations.tick()); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ---------- errors ----------
