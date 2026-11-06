@@ -95,7 +95,19 @@ CREATE TABLE IF NOT EXISTS plan_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, task_id INTEGER, course_id INTEGER,
   date TEXT NOT NULL, title TEXT NOT NULL, minutes INTEGER NOT NULL DEFAULT 45, done INTEGER NOT NULL DEFAULT 0
 );
+-- notifications (bell + push)
+CREATE TABLE IF NOT EXISTS notifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  audience TEXT NOT NULL DEFAULT 'all',            -- all | admins | section | user
+  target_id INTEGER,                               -- section id or user id
+  kind TEXT NOT NULL DEFAULT 'info',               -- task | sheet | due | email | moodle | join | info
+  title TEXT NOT NULL, body TEXT DEFAULT '', url TEXT DEFAULT '#/dashboard',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, user_id INTEGER NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')));
+CREATE TABLE IF NOT EXISTS sent_once (key TEXT PRIMARY KEY, at TEXT NOT NULL DEFAULT (datetime('now')));  -- de-duplicates reminders & emails
 CREATE INDEX IF NOT EXISTS idx_progress_due ON progress(user_id, due_at);
+CREATE INDEX IF NOT EXISTS idx_notif ON notifications(created_at);
 CREATE INDEX IF NOT EXISTS idx_reviews_user ON reviews(user_id, at);
 `;
 
@@ -154,6 +166,11 @@ const db = {
     // migrations for databases created by older versions
     const cols = (await db.all('PRAGMA table_info(users)')).map((c) => c.name);
     if (!cols.includes('username')) await migrateToUsernames(cols);
+    const ucols = (await db.all('PRAGMA table_info(users)')).map((c) => c.name);
+    if (!ucols.includes('notif_seen_at')) await db.run('ALTER TABLE users ADD COLUMN notif_seen_at TEXT');
+    const tcols = (await db.all('PRAGMA table_info(tasks)')).map((c) => c.name);
+    if (!tcols.includes('source')) await db.run("ALTER TABLE tasks ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'"); // manual | moodle
+    if (!tcols.includes('external_id')) await db.run('ALTER TABLE tasks ADD COLUMN external_id TEXT');
   },
 
   // ---- files, stored in 512 KB chunks ----

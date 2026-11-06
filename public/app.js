@@ -61,7 +61,29 @@ const courseTag = (name, color) => (name ? `<span class="row small" style="gap:5
 const bar = (pct, cls = '') => `<div class="bar ${cls}"><span style="width:${Math.max(0, Math.min(100, pct || 0))}%"></span></div>`;
 async function loadCourses() { COURSES = await GET('/api/courses'); }
 
-const BRAND = '<span class="brand-logo"><img src="/icons/emblem-64.png" alt=""></span>E-JUST';
+// ---------- line icons (used instead of emoji) ----------
+const ICONS = {
+  home: '<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/>',
+  check: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="m8.5 12.5 2.5 2.5 4.5-5"/>',
+  file: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M8 13h8M8 17h6"/>',
+  target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/>',
+  calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  bell: '<path d="M6 16V11a6 6 0 1 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/>',
+  list: '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/>',
+  users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6.5 6.5 0 0 1 3.5 6"/>',
+  lock: '<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 1 1 8 0v3"/>',
+  link: '<path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1"/>',
+  download: '<path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 19h16"/>',
+  mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+  refresh: '<path d="M20 11a8 8 0 0 0-14.9-3M4 13a8 8 0 0 0 14.9 3"/><path d="M4 4v4h4M20 20v-4h-4"/>',
+};
+const icon = (name) => `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
+function renderIcons(root = document) { $$('i[data-icon]', root).forEach((el) => { el.outerHTML = icon(el.dataset.icon); }); }
+renderIcons();
+
+const BRAND ='<span class="brand-logo"><img src="/icons/emblem-64.png" alt=""></span>E-JUST';
 const isAdmin = () => ME?.role === 'admin';
 const can = (perm) => !!ME?.perms?.includes(perm);
 
@@ -170,8 +192,8 @@ async function sectionDialog() {
 }
 
 // ---------- router ----------
-const routes = { dashboard, tasks, materials, practice, questions, planner, focus, courses, class: classPage, permissions: permissionsPage };
-const adminRoutes = ['class', 'permissions'];
+const routes = { dashboard, tasks, materials, practice, questions, planner, focus, courses, class: classPage, permissions: permissionsPage, notifications: notificationsPage, connections: connectionsPage };
+const adminRoutes = ['class', 'permissions', 'connections'];
 async function route() {
   if (!ME) return;
   let [name, ...args] = (location.hash.replace(/^#\/?/, '').split('?')[0] || 'dashboard').split('/');
@@ -207,22 +229,22 @@ $('#sidebar').addEventListener('touchend', (e) => { if (touchX !== null && touch
 // =====================================================================
 async function dashboard() {
   const [d, overview] = await Promise.all([GET(`/api/dashboard?today=${ymd(new Date())}&tz_offset=${new Date().getTimezoneOffset()}`), GET('/api/courses/overview')]);
-  const notifBtn = 'Notification' in window && Notification.permission === 'default'
-    ? '<button class="btn soft small" id="notif">🔔 Enable reminders</button>' : '';
+  const notifBtn = pushState() === 'off'
+    ? `<button class="btn soft small" id="notif">${icon('bell')}Turn on notifications</button>` : '';
 
   view.innerHTML = `
-    <div class="page-head"><div><h1>Hi ${esc(ME.name.split(' ')[0])} 👋</h1>
+    <div class="page-head"><div><h1>Hi ${esc(ME.name.split(' ')[0])}</h1>
       <div class="muted">${new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</div></div>
-      <div class="row">${notifBtn}<a class="btn" href="#/practice">🎯 Start practising</a></div></div>
+      <div class="row">${notifBtn}<a class="btn" href="#/practice">${icon('target')}Start practising</a></div></div>
     <div id="install-card" class="card install-card hidden"><div class="row spread">
       <div class="row" style="flex-wrap:nowrap"><img src="/icons/icon-192.png" alt="" width="44" height="44" style="border-radius:10px">
         <div><b>Install E-JUST</b><div class="small muted">Get it on your home screen or desktop. Opens in its own window, no browser bar.</div></div></div>
-      <div class="row"><button class="btn small" id="install-card-btn">📲 Install</button><button class="btn ghost small" id="install-card-x">Not now</button></div></div></div>
-    ${isAdmin() ? `<a id="pending-banner" class="banner ${PENDING ? '' : 'hidden'}" href="#/class" style="display:block;text-decoration:none">🙋 <b id="pending-count">${PENDING}</b> join request(s) waiting for your approval → review</a>` : ''}
-    ${d.overdue.length ? `<div class="banner red">⚠️ You have <b>${d.overdue.length}</b> overdue item${d.overdue.length > 1 ? 's' : ''}: ${d.overdue.map((t) => esc(t.title)).join(', ')}</div>` : ''}
-    ${d.due_soon_count ? `<div class="banner">⏰ <b>${d.due_soon_count}</b> item${d.due_soon_count > 1 ? 's are' : ' is'} due in the next 3 days.</div>` : ''}
+      <div class="row"><button class="btn small" id="install-card-btn">${icon('download')}Install</button><button class="btn ghost small" id="install-card-x">Not now</button></div></div></div>
+    ${isAdmin() ? `<a id="pending-banner" class="banner ${PENDING ? '' : 'hidden'}" href="#/class" style="display:block;text-decoration:none"><b id="pending-count">${PENDING}</b> join request(s) waiting for your approval — review</a>` : ''}
+    ${d.overdue.length ? `<div class="banner red">You have <b>${d.overdue.length}</b> overdue item${d.overdue.length > 1 ? 's' : ''}: ${d.overdue.map((t) => esc(t.title)).join(', ')}</div>` : ''}
+    ${d.due_soon_count ? `<div class="banner"><b>${d.due_soon_count}</b> item${d.due_soon_count > 1 ? 's are' : ' is'} due in the next 3 days.</div>` : ''}
     <div class="stats">
-      <div class="stat"><div class="num">🔥 ${d.streak}</div><div class="lbl">day study streak</div></div>
+      <div class="stat"><div class="num">${d.streak}</div><div class="lbl">day study streak</div></div>
       <div class="stat ${d.reviews_due ? 'alert' : ''}"><div class="num">${d.reviews_due}</div><div class="lbl">MCQs due for review</div></div>
       <div class="stat"><div class="num">${d.new_questions}</div><div class="lbl">new questions waiting</div></div>
       <div class="stat"><div class="num">${Math.round(d.minutes_week / 6) / 10}h</div><div class="lbl">focused study this week</div></div>
@@ -243,7 +265,7 @@ async function dashboard() {
   $('#install-card-btn').onclick = installApp;
   $('#install-card-x').onclick = () => { localStorage.setItem('installCardHidden', '1'); refreshInstallUI(); };
   refreshInstallUI();
-  $('#notif')?.addEventListener('click', async () => { await Notification.requestPermission(); dashboard(); });
+  $('#notif')?.addEventListener('click', async () => { await enablePush(); dashboard(); });
 }
 const taskRowSimple = (t) => `<div class="row" style="gap:10px"><span class="badge ${t.type}">${t.type}</span>
   <div class="grow" style="flex:1"><b>${esc(t.title)}</b> ${courseTag(t.course_name, t.course_color)}<div class="small">${fmtDue(t.due_at)}</div></div></div>`;
@@ -656,7 +678,7 @@ setInterval(async () => {
       notify('Focus session done! 🎉', `Logged ${T.focusMin} minutes. Take a ${T.breakMin}-minute break.`);
       T.phase = 'break'; T.remaining = T.breakMin * 60;
     } else {
-      notify('Break over ⏰', 'Ready for another focus session?');
+      notify('Break over', 'Ready for another focus session?');
       T.phase = 'focus'; T.remaining = T.focusMin * 60;
     }
     T.running = false; saveT();
@@ -665,9 +687,9 @@ setInterval(async () => {
   const top = $('#top-timer');
   if (T.running || T.remaining !== T.focusMin * 60 || T.phase === 'break') {
     mini.classList.remove('hidden');
-    mini.textContent = `${T.phase === 'focus' ? '🎯 Focus' : '☕ Break'} ${fmtClock(timeLeft())}${T.running ? '' : ' (paused)'}`;
+    mini.textContent = `${T.phase === 'focus' ? 'Focus' : 'Break'} ${fmtClock(timeLeft())}${T.running ? '' : ' (paused)'}`;
     top.classList.remove('hidden');
-    top.textContent = `${T.phase === 'focus' ? '🎯' : '☕'} ${fmtClock(timeLeft())}${T.running ? '' : ' ⏸'}`;
+    top.textContent = `${fmtClock(timeLeft())}${T.running ? '' : ' (paused)'}`;
   } else { mini.classList.add('hidden'); top.classList.add('hidden'); }
   const clock = $('#clock'); if (clock) clock.textContent = fmtClock(timeLeft());
 }, 500);
@@ -922,10 +944,8 @@ async function permissionsPage() {
 // =====================================================================
 // REMINDERS — browser notifications while the app is open
 // =====================================================================
-function notify(title, body) {
-  toast(`${title} ${body}`);
-  if ('Notification' in window && Notification.permission === 'granted') new Notification(title, { body });
-}
+// in-app pop-up only; real phone/PC notifications come from the server via push
+function notify(title, body) { toast(`${title} — ${body}`); }
 let remTimer = null;
 async function checkReminders() {
   try {
@@ -942,7 +962,7 @@ async function checkReminders() {
     }
     const today = ymd(new Date());
     if (r.reviews_due >= 5 && sent['reviews'] !== today) {
-      sent['reviews'] = today; notify('Time to review 🎯', `${r.reviews_due} questions are due for review.`);
+      sent['reviews'] = today; notify('Time to review', `${r.reviews_due} questions are due for review.`);
     }
     localStorage.setItem('reminded', JSON.stringify(sent));
   } catch {}
@@ -953,7 +973,6 @@ async function updatePendingBadge() {
   if (!isAdmin()) return;
   try {
     const { n } = await GET('/api/admin/pending-count');
-    if (n > PENDING) notify('New join request 🙋', `${n} ${n === 1 ? 'person is' : 'people are'} waiting for your approval (Class & Sections).`);
     PENDING = n;
     const link = $('#nav a[data-route="class"]');
     link.querySelector('.nav-badge')?.remove();
@@ -963,10 +982,183 @@ async function updatePendingBadge() {
   } catch {}
 }
 function startReminders() {
-  stopReminders(); checkReminders(); updatePendingBadge();
-  remTimer = setInterval(() => { checkReminders(); updatePendingBadge(); }, 60000);
+  stopReminders(); checkReminders(); updatePendingBadge(); pollNotifications(true);
+  remTimer = setInterval(() => { checkReminders(); updatePendingBadge(); pollNotifications(); }, 60000);
 }
 function stopReminders() { clearInterval(remTimer); }
+
+// =====================================================================
+// NOTIFICATIONS — bell, list page, push to phone/PC
+// =====================================================================
+let lastNotifId = 0;
+const NOTIF_ICON = { task: 'check', sheet: 'file', due: 'clock', email: 'mail', moodle: 'link', join: 'users', info: 'bell' };
+async function pollNotifications(first = false) {
+  try {
+    const { items, unread } = await GET('/api/notifications');
+    $$('.bell-count').forEach((b) => { b.textContent = unread > 99 ? '99+' : unread; b.classList.toggle('hidden', !unread); });
+    const newest = items[0]?.id || 0;
+    // pop-up for things that arrived while the app is open (push shows them when it's closed)
+    if (!first && newest > lastNotifId) items.filter((n) => n.id > lastNotifId && n.unread).slice(0, 3).reverse().forEach((n) => toast(n.title));
+    lastNotifId = Math.max(lastNotifId, newest);
+    if (location.hash.startsWith('#/notifications') && !first && newest > lastNotifId) notificationsPage();
+  } catch {}
+}
+$$('[data-bell]').forEach((b) => (b.onclick = () => { location.hash = '#/notifications'; }));
+
+const timeAgo = (s) => {
+  const ms = Date.now() - new Date(s.replace(' ', 'T') + 'Z').getTime();
+  const m = Math.round(ms / 60000);
+  if (m < 1) return 'just now'; if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60); if (h < 24) return `${h} h ago`;
+  return new Date(s.replace(' ', 'T') + 'Z').toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+};
+
+async function notificationsPage() {
+  const { items } = await GET('/api/notifications');
+  const state = pushState();
+  view.innerHTML = `
+    <div class="page-head"><div><h1>Notifications</h1><div class="muted">New assignments, deadlines, Moodle updates and emails.</div></div>
+      <div class="row">${state === 'on' ? `<button class="btn ghost small" id="push-test">Send a test</button><button class="btn ghost small" id="push-off">Turn off on this device</button>`
+        : state === 'off' ? `<button class="btn" id="push-on">${icon('bell')}Turn on notifications</button>` : ''}</div></div>
+    ${state === 'off' ? '<div class="banner">Turn on notifications to get alerts on this phone or computer even when E-JUST is closed.</div>' : ''}
+    ${state === 'blocked' ? '<div class="banner red">Notifications are blocked for this site in your browser settings. Allow them for this site, then reload.</div>' : ''}
+    ${state === 'ios' ? '<div class="banner">On iPhone/iPad, first install E-JUST (Share → Add to Home Screen) and open it from the home screen — then you can turn on notifications here.</div>' : ''}
+    ${state === 'unsupported' ? '<div class="banner">This browser can\'t show notifications when the app is closed. You\'ll still see them here.</div>' : ''}
+    <div class="list">${items.length ? items.map((n) => {
+      const ext = /^https?:/.test(n.url);
+      return `<a class="notif ${n.unread ? 'unread' : ''}" href="${esc(n.url || '#/notifications')}" ${ext ? 'target="_blank" rel="noopener"' : ''}>
+        <span class="n-ic ${esc(n.kind)}">${icon(NOTIF_ICON[n.kind] || 'bell')}</span>
+        <span class="n-body"><span class="n-title">${esc(n.title)}</span>${n.body ? `<div class="n-text">${esc(n.body)}</div>` : ''}</span>
+        <span class="n-time">${timeAgo(n.created_at)}</span></a>`; }).join('')
+      : '<div class="card empty">No notifications yet.</div>'}</div>`;
+  await POST('/api/notifications/seen').catch(() => {});
+  $$('.bell-count').forEach((b) => b.classList.add('hidden'));
+  $('#push-on')?.addEventListener('click', async () => { await enablePush(); notificationsPage(); });
+  $('#push-off')?.addEventListener('click', async () => { await disablePush(); notificationsPage(); });
+  $('#push-test')?.addEventListener('click', async () => { await POST('/api/push/test').catch(fail); toast('Test sent — it should pop up in a few seconds'); });
+}
+
+// ---- push subscription ----
+function pushState() {
+  if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) return isIOS() && !isStandalone() ? 'ios' : 'unsupported';
+  if (Notification.permission === 'denied') return 'blocked';
+  return localStorage.getItem('pushOn') === '1' && Notification.permission === 'granted' ? 'on' : 'off';
+}
+const b64ToBytes = (b64) => { const s = atob((b64 + '='.repeat((4 - (b64.length % 4)) % 4)).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(s, (c) => c.charCodeAt(0)); };
+async function enablePush() {
+  try {
+    if ((await Notification.requestPermission()) !== 'granted') return toast('Notifications were not allowed', true);
+    const reg = await navigator.serviceWorker.register('/sw.js');
+    await navigator.serviceWorker.ready;
+    const { key } = await GET('/api/push/key');
+    const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(key) });
+    await POST('/api/push/subscribe', sub.toJSON());
+    localStorage.setItem('pushOn', '1');
+    toast('Notifications are on for this device');
+    POST('/api/push/test').catch(() => {});
+  } catch (e) { fail(new Error('Could not turn on notifications: ' + e.message)); }
+}
+async function disablePush() {
+  const reg = await navigator.serviceWorker.getRegistration();
+  const sub = await reg?.pushManager.getSubscription();
+  if (sub) { await POST('/api/push/unsubscribe', { endpoint: sub.endpoint }).catch(() => {}); await sub.unsubscribe().catch(() => {}); }
+  localStorage.removeItem('pushOn');
+  toast('Notifications turned off on this device');
+}
+
+// =====================================================================
+// CONNECTIONS (admins) — Moodle calendar + Gmail
+// =====================================================================
+function gmailScript(hookUrl, secret) {
+  return `// E-JUST — forwards new university/Moodle emails to your E-JUST web app.
+// Runs inside YOUR Gmail account on Google's servers. Nothing is shared except
+// the subject, sender and a short preview of matching emails.
+const WEBAPP = '${hookUrl}';
+const KEY = '${secret}';
+// Which emails to forward (Gmail search). Change it to match your university:
+const SEARCH = 'newer_than:2d (from:moodle OR from:ejust.edu.eg OR subject:(assignment OR quiz OR exam OR deadline))';
+
+function checkEmails() {
+  const props = PropertiesService.getScriptProperties();
+  const seen = JSON.parse(props.getProperty('seen') || '[]');
+  const messages = [];
+  GmailApp.search(SEARCH, 0, 30).forEach(function (thread) {
+    thread.getMessages().forEach(function (m) {
+      const id = m.getId();
+      if (seen.indexOf(id) !== -1) return;
+      messages.push({ id: id, from: m.getFrom(), subject: m.getSubject(), date: m.getDate().toISOString(),
+        snippet: m.getPlainBody().replace(/\\s+/g, ' ').slice(0, 300),
+        link: 'https://mail.google.com/mail/u/0/#inbox/' + thread.getId() });
+      seen.push(id);
+    });
+  });
+  // also wakes the web app so Moodle sync and deadline reminders run
+  UrlFetchApp.fetch(WEBAPP, { method: 'post', contentType: 'application/json',
+    headers: { 'X-EJUST-Key': KEY }, payload: JSON.stringify({ messages: messages }), muteHttpExceptions: true });
+  props.setProperty('seen', JSON.stringify(seen.slice(-500)));
+}
+
+// Run this ONCE: it makes checkEmails run every 10 minutes.
+function setup() {
+  ScriptApp.getProjectTriggers().forEach(function (t) { ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger('checkEmails').timeBased().everyMinutes(10).create();
+  checkEmails();
+}`;
+}
+
+async function connectionsPage() {
+  const c = await GET('/api/admin/connections');
+  const when = (iso) => (iso ? new Date(iso).toLocaleString() : 'never');
+  const script = gmailScript(c.email.hook_url, c.email.secret);
+  view.innerHTML = `
+    <div class="page-head"><div><h1>Connections</h1><div class="muted">Bring Moodle deadlines and university emails into E-JUST, and get notified.</div></div></div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="row spread"><h2 style="margin:0">${icon('link')} Moodle</h2>
+        <span class="badge ${c.moodle.connected ? 'green' : 'gray'}">${c.moodle.connected ? 'Connected' : 'Not connected'}</span></div>
+      <p class="small muted">E-JUST reads your Moodle calendar and adds every assignment, quiz and exam deadline to the right course (courses are created automatically). Everyone in the class gets notified about new items and changed due dates.</p>
+      <ol class="steps small">
+        <li>Open Moodle and go to <b>Calendar</b> (or <b>Dashboard → Calendar</b>).</li>
+        <li>Click <b>Import or export calendars</b> → <b>Export calendar</b>.</li>
+        <li>Choose <b>Events to export: All courses</b> and <b>Time period: Recent and next 60 days</b>.</li>
+        <li>Click <b>Get calendar URL</b>, copy the link and paste it here.</li>
+      </ol>
+      <form class="row" id="moodle-form" style="flex-wrap:nowrap">
+        <input name="url" placeholder="${c.moodle.connected ? 'Paste a new link to replace the current one' : 'https://moodle…/calendar/export_execute.php?…'}">
+        <button class="btn">Save</button></form>
+      ${c.moodle.connected ? `<div class="small muted" style="margin-top:8px">Current link: <code>${esc(c.moodle.url_hint)}</code></div>
+        <div class="small" style="margin-top:6px">Last sync: <b>${when(c.moodle.last_sync)}</b> — ${esc(c.moodle.last_status || '')}</div>
+        <div class="row" style="margin-top:10px"><button class="btn soft small" id="moodle-sync">${icon('refresh')}Sync now</button>
+          <button class="btn ghost small" id="moodle-off">Disconnect</button></div>` : ''}
+    </div>
+
+    <div class="card">
+      <div class="row spread"><h2 style="margin:0">${icon('mail')} Gmail</h2>
+        <span class="badge ${c.email.last ? 'green' : 'gray'}">${c.email.last ? 'Last check ' + when(c.email.last) : 'Not set up yet'}</span></div>
+      <p class="small muted">A small script runs in your Gmail (on Google's servers, free) every 10 minutes. It sends new university/Moodle emails to E-JUST as notifications, and also keeps the Moodle sync and deadline reminders running.</p>
+      <label class="switch-row" style="margin:8px 0"><input type="checkbox" class="check" id="email-share" ${c.email.share ? 'checked' : ''}>
+        Show email alerts to the whole class (otherwise only to ${c.email.owner ? esc(c.email.owner) : 'you'})</label>
+      <ol class="steps small">
+        <li>Open <a href="https://script.google.com/home/projects/create" target="_blank" rel="noopener">script.google.com</a> while signed in to the Gmail you want to use, and create a <b>New project</b>.</li>
+        <li>Delete what's there, then paste the script below (<b>Copy script</b>). Click <b>Save</b>.</li>
+        <li>In the function menu at the top choose <b>setup</b> and click <b>Run</b>. Google asks for permission — click <b>Review permissions</b>, choose your account, then <b>Advanced → Go to project → Allow</b>.</li>
+        <li>Done. Within 10 minutes this page shows "Last check". Change <code>SEARCH</code> in the script to pick which emails count.</li>
+      </ol>
+      <div class="row" style="margin-bottom:8px"><button class="btn small" id="copy-script">Copy script</button>
+        <button class="btn ghost small" id="new-secret" title="Old scripts stop working">Make a new key</button></div>
+      <div class="code-box" id="script-box">${esc(script)}</div>
+      <p class="small muted" style="margin-top:8px">The script contains a private key for your class — don't share it.</p>
+    </div>`;
+  const run = async (p, msg) => { try { const r = await p; if (msg) toast(typeof msg === 'function' ? msg(r) : msg); } catch (e) { fail(e); } connectionsPage(); };
+  $('#moodle-form').onsubmit = (e) => { e.preventDefault(); const url = e.target.url.value.trim(); if (!url) return;
+    run(PUT('/api/admin/connections', { moodle_ical_url: url }).then(() => POST('/api/admin/connections/moodle-sync')),
+      (r) => (r.error ? 'Moodle: ' + r.error : `Moodle connected — ${r.added} new item(s) added`)); };
+  $('#moodle-sync')?.addEventListener('click', () => run(POST('/api/admin/connections/moodle-sync'), (r) => (r.error ? 'Moodle: ' + r.error : `Synced — ${r.added} new, ${r.updated} updated`)));
+  $('#moodle-off')?.addEventListener('click', () => confirm('Disconnect Moodle? Items already imported stay.') && run(PUT('/api/admin/connections', { moodle_ical_url: '' }), 'Moodle disconnected'));
+  $('#email-share').onchange = (e) => run(PUT('/api/admin/connections', { email_share: e.target.checked, claim_email: !e.target.checked }), 'Saved');
+  $('#copy-script').onclick = () => run(PUT('/api/admin/connections', { claim_email: true }).then(() => navigator.clipboard.writeText(script)), 'Script copied — paste it into script.google.com');
+  $('#new-secret').onclick = () => confirm('Make a new key? You will need to paste the new script into Google again.') && run(POST('/api/admin/connections/new-secret'), 'New key made — copy the script again');
+}
 
 // =====================================================================
 // INSTALL AS AN APP (phones & computers)
