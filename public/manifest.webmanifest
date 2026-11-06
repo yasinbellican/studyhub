@@ -1,6 +1,6 @@
 {
-  "name": "StudyHub",
-  "short_name": "StudyHub",
+  "name": "E-JUST",
+  "short_name": "E-JUST",
   "description": "Your class's study space: assignments, study sheets and MCQ practice.",
   "id": "/",
   "start_url": "/#/dashboard",

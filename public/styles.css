@@ -251,3 +251,10 @@ img, iframe { max-width: 100%; }
 
 /* colour pickers keep their size inside rows */
 .row > input[type="color"] { flex: 0 0 54px; }
+.brand-sub { font-size: 12px; font-weight: 500; color: #a9acd6; margin-top: 2px; }
+
+/* join requests */
+.nav-badge { display: inline-block; min-width: 20px; padding: 1px 6px; border-radius: 99px; background: var(--red); color: #fff; font-size: 12px; font-weight: 700; text-align: center; margin-left: 4px; }
+.requests-card { border-left: 4px solid var(--amber); }
+.request-row { border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.banner.hidden { display: none !important; }

@@ -62,9 +62,9 @@ async function startSession(res, userId) {
 }
 async function auth(req, res, next) {
   const token = req.cookies.sid;
-  const row = token && await db.get(`SELECT u.id, u.name, u.email, u.role, u.section_id, u.permissions, s.name AS section_name
+  const row = token && await db.get(`SELECT u.id, u.name, u.username, u.role, u.section_id, u.permissions, s.name AS section_name
     FROM sessions x JOIN users u ON u.id = x.user_id LEFT JOIN sections s ON s.id = u.section_id
-    WHERE x.token = ? AND x.expires_at > ?`, token, nowISO());
+    WHERE x.token = ? AND x.expires_at > ? AND u.status = 'approved'`, token, nowISO());
   if (!row) return res.status(401).json({ error: 'Not signed in' });
   row.perms = effectivePerms(row);
   delete row.permissions;
@@ -129,11 +129,20 @@ app.get('/api/class/join-info', async (req, res) => {
   res.json({ name: await getSetting('class_name'), sections: await db.all('SELECT id, name FROM sections ORDER BY name') });
 });
 
+// usernames: 3–30 characters, letters, numbers, dot, dash, underscore (not case-sensitive)
+function cleanUsername(u) {
+  const v = String(u || '').trim();
+  if (!/^[A-Za-z0-9._-]{3,30}$/.test(v)) throw httpError(400, 'Username must be 3–30 characters: letters, numbers, dots, dashes or underscores (no spaces)');
+  return v;
+}
+async function usernameTaken(u) { return !!(await db.get('SELECT id FROM users WHERE username = ?', u)); }
+
 // First user sets up the class and becomes its admin
 app.post('/api/setup', async (req, res) => {
   if ((await userCount()) > 0) return res.status(409).json({ error: 'The class is already set up. Join with an invite code.' });
-  const { class_name, sections, name, email, password } = req.body || {};
-  if (!class_name || !name || !email || !password) return res.status(400).json({ error: 'Class name, your name, email and password are required' });
+  const { class_name, sections, name, password } = req.body || {};
+  if (!class_name || !name || !req.body.username || !password) return res.status(400).json({ error: 'Class name, your name, username and password are required' });
+  const username = cleanUsername(req.body.username);
   if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
   const names = [...new Set(String(sections || '').split(',').map((s) => s.trim()).filter(Boolean))];
   if (!names.length) return res.status(400).json({ error: 'Add at least one section' });
@@ -141,31 +150,32 @@ app.post('/api/setup', async (req, res) => {
   await setSetting('invite_code', newInviteCode());
   const ids = [];
   for (const n of names) ids.push((await db.run('INSERT INTO sections (name) VALUES (?)', n)).lastInsertRowid);
-  const r = await db.run("INSERT INTO users (name, email, pass_hash, role, section_id) VALUES (?, ?, ?, 'admin', ?)",
-    name.trim(), email.toLowerCase().trim(), hashPassword(password), ids[0]);
+  const r = await db.run("INSERT INTO users (name, username, pass_hash, role, status, section_id) VALUES (?, ?, ?, 'admin', 'approved', ?)",
+    name.trim(), username, hashPassword(password), ids[0]);
   await startSession(res, r.lastInsertRowid);
   res.json({ ok: true });
 });
 
-// Students join with the invite code and pick their section
+// Students ask to join with the invite code; an admin must approve them before they can sign in
 app.post('/api/register', async (req, res) => {
-  const { name, email, password, code, section_id } = req.body || {};
+  const { name, password, code, section_id } = req.body || {};
   if ((await userCount()) === 0) return res.status(400).json({ error: 'The class has not been set up yet' });
   if (String(code || '').trim().toUpperCase() !== (await getSetting('invite_code'))) return res.status(403).json({ error: 'That invite code is not valid' });
-  if (!name || !email || !password) return res.status(400).json({ error: 'Name, email and password are required' });
+  if (!name || !req.body.username || !password) return res.status(400).json({ error: 'Name, username and password are required' });
+  const username = cleanUsername(req.body.username);
   if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
   const sid = await checkSection(section_id);
-  if (await db.get('SELECT id FROM users WHERE email = ?', email.toLowerCase().trim())) return res.status(409).json({ error: 'An account with this email already exists' });
-  const r = await db.run('INSERT INTO users (name, email, pass_hash, section_id) VALUES (?, ?, ?, ?)',
-    name.trim(), email.toLowerCase().trim(), hashPassword(password), sid);
-  await startSession(res, r.lastInsertRowid);
-  res.json({ ok: true });
+  if (await usernameTaken(username)) return res.status(409).json({ error: 'That username is already taken — try another one' });
+  await db.run("INSERT INTO users (name, username, pass_hash, status, section_id) VALUES (?, ?, ?, 'pending', ?)",
+    name.trim(), username, hashPassword(password), sid);
+  res.json({ pending: true });
 });
 
 app.post('/api/login', async (req, res) => {
-  const { email, password } = req.body || {};
-  const user = email && await db.get('SELECT * FROM users WHERE email = ?', email.toLowerCase().trim());
-  if (!user || !verifyPassword(password || '', user.pass_hash)) return res.status(401).json({ error: 'Wrong email or password' });
+  const { username, password } = req.body || {};
+  const user = username && await db.get('SELECT * FROM users WHERE username = ?', String(username).trim());
+  if (!user || !verifyPassword(password || '', user.pass_hash)) return res.status(401).json({ error: 'Wrong username or password' });
+  if (user.status !== 'approved') return res.status(403).json({ error: 'Your request to join is waiting for an admin to approve it. Try again later.', pending: true });
   await startSession(res, user.id);
   res.json({ ok: true });
 });
@@ -188,11 +198,13 @@ app.get('/api/admin/class', ...A, async (req, res) => {
   res.json({
     name: await getSetting('class_name'),
     invite_code: await getSetting('invite_code'),
-    sections: await db.all(`SELECT s.id, s.name, (SELECT COUNT(*) FROM users u WHERE u.section_id = s.id) AS members
+    sections: await db.all(`SELECT s.id, s.name, (SELECT COUNT(*) FROM users u WHERE u.section_id = s.id AND u.status = 'approved') AS members
       FROM sections s ORDER BY s.name`),
-    members: (await db.all(`SELECT u.id, u.name, u.email, u.role, u.section_id, u.permissions, s.name AS section_name, u.created_at
-      FROM users u LEFT JOIN sections s ON s.id = u.section_id ORDER BY u.role, u.name`))
+    members: (await db.all(`SELECT u.id, u.name, u.username, u.role, u.section_id, u.permissions, s.name AS section_name, u.created_at
+      FROM users u LEFT JOIN sections s ON s.id = u.section_id WHERE u.status = 'approved' ORDER BY u.role, u.name`))
       .map(({ permissions, ...m }) => ({ ...m, permissions: parsePerms(permissions), perms: effectivePerms({ ...m, permissions }) })),
+    pending: await db.all(`SELECT u.id, u.name, u.username, u.section_id, s.name AS section_name, u.created_at
+      FROM users u LEFT JOIN sections s ON s.id = u.section_id WHERE u.status = 'pending' ORDER BY u.created_at`),
     permission_list: PERMISSIONS,
   });
 });
@@ -224,6 +236,17 @@ app.delete('/api/admin/sections/:id', ...A, async (req, res) => {
     ['DELETE FROM sections WHERE id = ?', id],
   ]);
   res.json({ ok: true });
+});
+// approve someone who asked to join (optionally placing them in a different section)
+app.post('/api/admin/members/:id/approve', ...A, async (req, res) => {
+  const m = await db.get("SELECT * FROM users WHERE id = ? AND status = 'pending'", req.params.id);
+  if (!m) return res.status(404).json({ error: 'No pending request found' });
+  const sid = req.body?.section_id ? await checkSection(req.body.section_id) : m.section_id;
+  await db.run("UPDATE users SET status = 'approved', section_id = ? WHERE id = ?", sid, m.id);
+  res.json({ ok: true });
+});
+app.get('/api/admin/pending-count', ...A, async (req, res) => {
+  res.json({ n: (await db.get("SELECT COUNT(*) AS n FROM users WHERE status = 'pending'")).n });
 });
 app.patch('/api/admin/members/:id', ...A, async (req, res) => {
   const m = await db.get('SELECT * FROM users WHERE id = ?', req.params.id);

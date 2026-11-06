@@ -71,8 +71,10 @@ async function showAuth(mode) {
   const status = await fetch('/api/class/status').then((r) => r.json()).catch(() => ({ setup_done: true }));
   if (!status.setup_done) mode = 'setup';
   mode = mode || 'login';
-  const head = (sub) => `<h1>📚 StudyHub</h1><p class="muted">${sub}</p>`;
-  const creds = (newPw) => `<div><label>Email</label><input name="email" type="email" required autocomplete="email"></div>
+  const head = (sub) => `<h1>📚 E-JUST</h1><p class="muted">${sub}</p>`;
+  const creds = (newPw) => `<div><label>Username</label><input name="username" required autocomplete="username" autocapitalize="none" spellcheck="false"
+      ${newPw ? 'pattern="[A-Za-z0-9._\\-]{3,30}" title="3–30 characters: letters, numbers, dots, dashes or underscores (no spaces)" placeholder="e.g. ahmed.ali"' : ''}>
+      ${newPw ? '<div class="small muted" style="margin-top:4px">3–30 characters, no spaces. You\'ll use it to sign in.</div>' : ''}</div>
     <div><label>Password</label><input name="password" type="password" required minlength="6" autocomplete="${newPw ? 'new-password' : 'current-password'}"></div>`;
   const submit = async (url, body) => { try { await POST(url, body); await boot(); } catch (err) { fail(err); } };
 
@@ -95,7 +97,8 @@ async function showAuth(mode) {
           <div><label>Your section</label><select name="section_id" id="sec" required></select>
             <div class="small muted" style="margin-top:4px">Choose carefully — after joining, only an admin can change your section.</div></div>
           <div><label>Your name</label><input name="name" required autocomplete="name"></div>${creds(true)}
-          <button class="btn big">Join class</button></div>
+          <button class="btn big">Send join request</button>
+          <div class="small muted" style="text-align:center">An admin has to approve your request before you can sign in.</div></div>
         <p class="small muted" style="text-align:center;margin:0">Already have an account? <a href="#" id="auth-switch">Sign in</a></p></form></div>`;
     const check = async () => {
       try {
@@ -110,8 +113,17 @@ async function showAuth(mode) {
     $('#auth-form').onsubmit = (e) => {
       e.preventDefault();
       if ($('#join-rest').classList.contains('hidden')) return check();
-      submit('/api/register', Object.fromEntries(new FormData(e.target)));
+      const body = Object.fromEntries(new FormData(e.target));
+      POST('/api/register', body).then(() => showAuth('requested')).catch(fail);
     };
+    return;
+  }
+  if (mode === 'requested') {
+    a.innerHTML = `<div class="card">${head('Request sent ✅')}
+      <p>Your request to join <b>${esc(status.name || 'the class')}</b> was sent.</p>
+      <p class="muted">An admin needs to approve it. Once they do, sign in with your <b>username</b> and <b>password</b>. You won't need the invite code again.</p>
+      <button class="btn big" id="to-login" style="width:100%;justify-content:center">Go to sign in</button></div>`;
+    $('#to-login').onclick = () => showAuth('login');
     return;
   }
   a.innerHTML = `<div class="card">${head(`Sign in to ${esc(status.name || 'your class')}`)}
@@ -125,7 +137,7 @@ $('#logout').onclick = async () => { await POST('/api/logout'); ME = null; stopR
 async function boot() {
   try { ME = await GET('/api/me'); } catch { return; }
   $('#auth').classList.add('hidden'); $('#shell').classList.remove('hidden');
-  $('.brand').textContent = '📚 ' + (ME.class_name || 'StudyHub');
+  $('.brand').innerHTML = '📚 E-JUST' + (ME.class_name ? `<div class="brand-sub">${esc(ME.class_name)}</div>` : '');
   // only admins can change sections; students just see theirs
   $('#me').innerHTML = `<b>${esc(ME.name)}</b>${isAdmin() ? ' <span class="badge">admin</span>' : ''}<br>
     ${isAdmin() ? `<a href="#" id="my-section" style="color:#cfd2ef">${esc(ME.section_name || 'No section')} · change</a>`
@@ -168,7 +180,7 @@ async function route() {
   const active = routes[name] ? name : 'dashboard';
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.route === active));
   const link = $(`#nav a[data-route="${active}"]`);
-  $('#top-title').textContent = link ? link.textContent.trim() : 'StudyHub';
+  $('#top-title').textContent = link ? link.textContent.trim() : 'E-JUST';
   closeMenu();
   window.scrollTo(0, 0);
   view.innerHTML = '<p class="muted">Loading…</p>';
@@ -203,8 +215,9 @@ async function dashboard() {
       <div class="row">${notifBtn}<a class="btn" href="#/practice">🎯 Start practising</a></div></div>
     <div id="install-card" class="card install-card hidden"><div class="row spread">
       <div class="row" style="flex-wrap:nowrap"><img src="/icons/icon-192.png" alt="" width="44" height="44" style="border-radius:10px">
-        <div><b>Install StudyHub</b><div class="small muted">Get it on your home screen or desktop. Opens in its own window, no browser bar.</div></div></div>
+        <div><b>Install E-JUST</b><div class="small muted">Get it on your home screen or desktop. Opens in its own window, no browser bar.</div></div></div>
       <div class="row"><button class="btn small" id="install-card-btn">📲 Install</button><button class="btn ghost small" id="install-card-x">Not now</button></div></div></div>
+    ${isAdmin() ? `<a id="pending-banner" class="banner ${PENDING ? '' : 'hidden'}" href="#/class" style="display:block;text-decoration:none">🙋 <b id="pending-count">${PENDING}</b> join request(s) waiting for your approval → review</a>` : ''}
     ${d.overdue.length ? `<div class="banner red">⚠️ You have <b>${d.overdue.length}</b> overdue item${d.overdue.length > 1 ? 's' : ''}: ${d.overdue.map((t) => esc(t.title)).join(', ')}</div>` : ''}
     ${d.due_soon_count ? `<div class="banner">⏰ <b>${d.due_soon_count}</b> item${d.due_soon_count > 1 ? 's are' : ' is'} due in the next 3 days.</div>` : ''}
     <div class="stats">
@@ -807,9 +820,19 @@ async function classPage() {
   const secOpts = (sel) => c.sections.map((s) => `<option value="${s.id}" ${s.id === sel ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
   view.innerHTML = `
     <div class="page-head"><div><h1>Class & Sections</h1><div class="muted">Manage the class, its sections and who can edit shared content.</div></div></div>
+    <div class="card requests-card" style="margin-bottom:16px" id="requests">
+      <h2>🙋 Join requests ${c.pending.length ? `<span class="badge high">${c.pending.length}</span>` : ''}</h2>
+      ${c.pending.length ? `<p class="small muted">These people used the invite code. They can't sign in until you approve them. Check the section before approving.</p>
+        <div class="list">${c.pending.map((p) => `<div class="row request-row">
+          <div style="flex:1;min-width:160px"><b>${esc(p.name)}</b><div class="small muted">@${esc(p.username)} · asked ${new Date(p.created_at.replace(' ', 'T') + 'Z').toLocaleString()}</div></div>
+          <select data-req-sec="${p.id}" style="width:auto" title="Section">${secOpts(p.section_id)}</select>
+          <button class="btn small" data-approve="${p.id}">✓ Approve</button>
+          <button class="btn danger small" data-reject="${p.id}">✕ Reject</button></div>`).join('')}</div>`
+        : '<div class="small muted">No one is waiting. New join requests will appear here.</div>'}
+    </div>
     <div class="grid g2" style="margin-bottom:16px">
       <div class="card"><h2>Invite classmates</h2>
-        <p class="small muted">Share this code. New students enter it on the sign-in page (“Join with an invite code”) and pick their section.</p>
+        <p class="small muted">Share this code. New students enter it on the sign-in page (“Join with an invite code”), pick their section and choose a username. You then approve them in <b>Join requests</b> above.</p>
         <div class="row"><code style="font-size:24px;font-weight:800;letter-spacing:3px">${esc(c.invite_code)}</code>
           <button class="btn soft small" id="copy">Copy</button><button class="btn ghost small" id="regen" title="Old code stops working">New code</button></div>
         <h3 style="margin-top:18px">Class name</h3>
@@ -822,7 +845,7 @@ async function classPage() {
     </div>
     <div class="card"><div class="row spread"><h2 style="margin:0">Members (${c.members.length})</h2><a class="btn soft small" href="#/permissions">🔐 Roles & permissions →</a></div>
       <div class="list" style="margin-top:12px">${c.members.map((m) => `<div class="row" style="border-bottom:1px solid var(--line);padding-bottom:8px">
-        <div style="flex:1;min-width:0"><b>${esc(m.name)}</b> ${m.id === ME.id ? '<span class="small muted">(you)</span>' : ''} ${m.role === 'admin' ? '<span class="badge">admin</span>' : ''}<div class="small muted">${esc(m.email)}</div></div>
+        <div style="flex:1;min-width:0"><b>${esc(m.name)}</b> ${m.id === ME.id ? '<span class="small muted">(you)</span>' : ''} ${m.role === 'admin' ? '<span class="badge">admin</span>' : ''}<div class="small muted">@${esc(m.username)}</div></div>
         <select data-msec="${m.id}" style="width:auto">${secOpts(m.section_id)}</select>
         ${m.id === ME.id ? '' : `<button class="btn danger small" data-mdel="${m.id}" title="Remove from class">✕</button>`}</div>`).join('')}</div></div>`;
   const run = async (p, msg) => { try { await p; if (msg) toast(msg); } catch (e) { fail(e); } classPage(); };
@@ -834,6 +857,8 @@ async function classPage() {
   $$('[data-sdel]').forEach((b) => (b.onclick = () => confirm('Delete this section? Its members will need to pick a new one, and its due dates are removed.') && run(DEL(`/api/admin/sections/${b.dataset.sdel}`), 'Section deleted')));
   $$('[data-msec]').forEach((s) => (s.onchange = () => run(PATCH(`/api/admin/members/${s.dataset.msec}`, { section_id: s.value }), 'Section changed')));
   $$('[data-mdel]').forEach((b) => (b.onclick = () => confirm('Remove this member from the class? Their account and progress are deleted.') && run(DEL(`/api/admin/members/${b.dataset.mdel}`), 'Member removed')));
+  $$('[data-approve]').forEach((b) => (b.onclick = () => run(POST(`/api/admin/members/${b.dataset.approve}/approve`, { section_id: $(`[data-req-sec="${b.dataset.approve}"]`).value }).then(updatePendingBadge), 'Approved — they can sign in now')));
+  $$('[data-reject]').forEach((b) => (b.onclick = () => confirm('Reject this join request? Their request is deleted; they would need the invite code to ask again.') && run(DEL(`/api/admin/members/${b.dataset.reject}`).then(updatePendingBadge), 'Request rejected')));
 }
 
 // =====================================================================
@@ -850,7 +875,7 @@ async function permissionsPage() {
   const c = await GET('/api/admin/class');
   const keys = Object.keys(c.permission_list);
   const q = permFilter.toLowerCase();
-  const members = c.members.filter((m) => !q || (m.name + ' ' + m.email + ' ' + (m.section_name || '')).toLowerCase().includes(q));
+  const members = c.members.filter((m) => !q || (m.name + ' ' + m.username + ' ' + (m.section_name || '')).toLowerCase().includes(q));
   const counts = Object.fromEntries(keys.map((k) => [k, c.members.filter((m) => m.perms.includes(k)).length]));
   view.innerHTML = `
     <div class="page-head"><div><h1>Permissions</h1><div class="muted">Only admins see this page. Choose what each class member is allowed to do.</div></div></div>
@@ -866,7 +891,7 @@ async function permissionsPage() {
       return `<div class="card perm-card">
         <div class="row spread" style="align-items:flex-start">
           <div style="min-width:0"><b>${esc(m.name)}</b> ${isMe ? '<span class="small muted">(you)</span>' : ''} ${adm ? '<span class="badge">⭐ admin</span>' : ''}
-            <div class="small muted">${esc(m.email)} · ${esc(m.section_name || 'No section')}</div></div>
+            <div class="small muted">@${esc(m.username)} · ${esc(m.section_name || 'No section')}</div></div>
           <label class="switch-row"><input type="checkbox" class="check" data-admin="${m.id}" ${adm ? 'checked' : ''} ${isMe ? 'disabled title="You can\'t remove your own admin role"' : ''}> Admin</label>
         </div>
         <div class="perm-grid">${keys.map((k) => `<label class="perm-opt ${adm ? 'locked' : ''}">
@@ -921,7 +946,25 @@ async function checkReminders() {
     localStorage.setItem('reminded', JSON.stringify(sent));
   } catch {}
 }
-function startReminders() { stopReminders(); checkReminders(); remTimer = setInterval(checkReminders, 60000); }
+// admins: badge + notification when people are waiting for approval
+let PENDING = 0;
+async function updatePendingBadge() {
+  if (!isAdmin()) return;
+  try {
+    const { n } = await GET('/api/admin/pending-count');
+    if (n > PENDING) notify('New join request 🙋', `${n} ${n === 1 ? 'person is' : 'people are'} waiting for your approval (Class & Sections).`);
+    PENDING = n;
+    const link = $('#nav a[data-route="class"]');
+    link.querySelector('.nav-badge')?.remove();
+    if (n) link.insertAdjacentHTML('beforeend', ` <span class="nav-badge">${n}</span>`);
+    $('#pending-banner')?.classList.toggle('hidden', !n);
+    const pc = $('#pending-count'); if (pc) pc.textContent = n;
+  } catch {}
+}
+function startReminders() {
+  stopReminders(); checkReminders(); updatePendingBadge();
+  remTimer = setInterval(() => { checkReminders(); updatePendingBadge(); }, 60000);
+}
 function stopReminders() { clearInterval(remTimer); }
 
 // =====================================================================
@@ -936,7 +979,7 @@ function refreshInstallUI() {
   $('#install-card')?.classList.toggle('hidden', !canInstall() || localStorage.getItem('installCardHidden') === '1');
 }
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; refreshInstallUI(); });
-window.addEventListener('appinstalled', () => { installPrompt = null; refreshInstallUI(); toast('StudyHub installed 🎉 Open it from your home screen or apps list.'); });
+window.addEventListener('appinstalled', () => { installPrompt = null; refreshInstallUI(); toast('E-JUST installed 🎉 Open it from your home screen or apps list.'); });
 
 async function installApp() {
   if (installPrompt) {
@@ -946,13 +989,13 @@ async function installApp() {
     return;
   }
   // iPhone / iPad Safari has no install button — show the steps
-  openModal(`<h2>📲 Install StudyHub</h2>
-    <p class="muted">Add StudyHub to your home screen and it opens like a normal app.</p>
+  openModal(`<h2>📲 Install E-JUST</h2>
+    <p class="muted">Add E-JUST to your home screen and it opens like a normal app.</p>
     <ol class="install-steps">
       <li>Open this page in <b>Safari</b>.</li>
       <li>Tap the <b>Share</b> button <span class="kbd">⬆︎</span> (bottom of the screen, or top on iPad).</li>
       <li>Scroll down and tap <b>Add to Home Screen</b> <span class="kbd">＋</span>.</li>
-      <li>Tap <b>Add</b>. StudyHub now appears on your home screen.</li>
+      <li>Tap <b>Add</b>. E-JUST now appears on your home screen.</li>
     </ol>
     <div class="row" style="justify-content:flex-end"><button class="btn" onclick="closeModal()">Got it</button></div>`);
 }

@@ -1,4 +1,4 @@
-# 📚 StudyHub
+# 📚 E-JUST (StudyHub)
 
 A study web app for one class. The class is split into **sections** by timetable. Everyone studies the same material, and each section can have its own due dates.
 
@@ -26,10 +26,11 @@ npm start
 
 Then open http://localhost:3000.
 
-1. **The first person to open the app sets up the class.** They enter the class name and the section names (for example `Section 1, Section 2, Section 3`) and become its first admin.
-2. Go to **Class & Sections** to copy the **invite code** and share it with classmates.
-3. Classmates choose **"Join with an invite code"**, enter the code and pick their section.
-4. To make another rep an admin, change their role on the **Class & Sections** page.
+1. **The first person to open the app sets up the class.** They enter the class name, the sections (for example `Section 1, Section 2, Section 3`), and their own name, **username** and password. They become the first admin.
+2. Go to **Class & Sections** and copy the **invite code**. Share it with classmates.
+3. Classmates choose **"Join with an invite code"**, enter the code, pick their section and choose a username and password. This only **sends a request**.
+4. An admin approves (or rejects) the request under **Class & Sections → Join requests**. Until then the person cannot sign in. After approval they sign in with their username and password; the code is only needed once.
+5. Admins control what each member may do on the **Permissions** page.
 
 ## Put it online for free
 

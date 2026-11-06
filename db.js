@@ -22,10 +22,12 @@ CREATE TABLE IF NOT EXISTS sections (id INTEGER PRIMARY KEY AUTOINCREMENT, name 
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
-  email TEXT NOT NULL UNIQUE,
+  username TEXT NOT NULL UNIQUE COLLATE NOCASE,  -- used to sign in (no email)
   pass_hash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'student',           -- admin | student
+  status TEXT NOT NULL DEFAULT 'pending',         -- pending (waiting for an admin) | approved
   section_id INTEGER,
+  permissions TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires_at TEXT NOT NULL);
@@ -97,6 +99,30 @@ CREATE INDEX IF NOT EXISTS idx_progress_due ON progress(user_id, due_at);
 CREATE INDEX IF NOT EXISTS idx_reviews_user ON reviews(user_id, at);
 `;
 
+// Older versions signed in with email. Rebuild the users table with usernames
+// (taken from the part of the email before "@") and mark everyone already in
+// the class as approved. Runs once, inside one transaction.
+async function migrateToUsernames(cols) {
+  const rows = (await client.execute('SELECT * FROM users ORDER BY id')).rows;
+  const taken = new Set();
+  const stmts = [{ sql: `CREATE TABLE users_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    pass_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'student', status TEXT NOT NULL DEFAULT 'pending',
+    section_id INTEGER, permissions TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL DEFAULT (datetime('now')))` }];
+  for (const r of rows) {
+    let base = String(r.email || r.name || 'user').split('@')[0].toLowerCase().replace(/[^a-z0-9._-]/g, '') || 'user';
+    let u = base, n = 2;
+    while (taken.has(u)) u = `${base}${n++}`;
+    taken.add(u);
+    stmts.push({ sql: `INSERT INTO users_new (id, name, username, pass_hash, role, status, section_id, permissions, created_at)
+      VALUES (?, ?, ?, ?, ?, 'approved', ?, ?, ?)`,
+    args: [r.id, r.name, u, r.pass_hash, r.role, r.section_id ?? null, cols.includes('permissions') ? r.permissions : '[]', r.created_at] });
+  }
+  stmts.push({ sql: 'DROP TABLE users' }, { sql: 'ALTER TABLE users_new RENAME TO users' });
+  await client.batch(stmts, 'write');
+  console.log(`Migrated ${rows.length} account(s) from email to username sign-in`);
+}
+
 // Accepts positional args (a, b, c) or one named-args object ({ $uid: 1 } or { uid: 1 })
 function normArgs(args) {
   const one = args[0];
@@ -127,7 +153,7 @@ const db = {
     await client.executeMultiple(SCHEMA);
     // migrations for databases created by older versions
     const cols = (await db.all('PRAGMA table_info(users)')).map((c) => c.name);
-    if (!cols.includes('permissions')) await db.run("ALTER TABLE users ADD COLUMN permissions TEXT NOT NULL DEFAULT '[]'");
+    if (!cols.includes('username')) await migrateToUsernames(cols);
   },
 
   // ---- files, stored in 512 KB chunks ----
