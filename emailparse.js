@@ -9,7 +9,8 @@ const JUNK = [
   /unsubscribe/i, /notification settings/i, /manage (your )?(email )?(notification|preferences)/i, /don.t want these emails/i,
   /^if you (no longer|don.t) want/i, /^©/, /^copyright/i, /^privacy/i, /^terms of service/i, /^logo/i,
   /^go to (the )?(course|forum|post|activity)/i, /^change your (forum|notification|email) (digest )?preferences/i,
-  /^this is a copy of a message posted/i, /^see this post in context/i, /^reply to this email/i, /^-{2,}$/, /^_{2,}$/, /^\[image/i,
+  /^this is a copy of a message posted/i, /^see this post in context/i, /^see details$/i, /^view details$/i,
+  /email notifications from google classroom/i, /^if you don.t want to receive/i, /^\.$/, /^receive these emails/i, /^reply to this email/i, /^-{2,}$/, /^_{2,}$/, /^\[image/i,
 ];
 const ACTION = /\b(submit|upload|hand in|turn in|deadline|due|bring|attend|prepare|read|solve|complete|finish|study|review|revise|exam|midterm|final|quiz|test|presentation|present|register|deliver|send|don.t forget|remember|must|required|mandatory|until|till|before|by (mon|tue|wed|thu|fri|sat|sun|tomorrow|today|\d))/i;
 
@@ -55,6 +56,15 @@ function parseEmail({ subject = '', from = '', body = '', snippet = '' }) {
   // Moodle: "COURSE » Forum » Topic" breadcrumbs
   const crumb = lines.findIndex((l) => /\s[»>]\s/.test(l) && l.length < 160);
   if (crumb >= 0 && !info.className) { info.className = lines[crumb].split(/\s[»>]\s/)[0]; lines.splice(crumb, 1); }
+
+  // Google Classroom (current layout): "<Class>" then "New assignment" ... "Posted on 2:18 PM, Nov 6 (EET) by <Teacher>"
+  const newIdx = lines.findIndex((l) => /^(new|updated) (assignment|announcement|material|question|quiz assignment)$/i.test(l));
+  if (newIdx >= 0) {
+    if (newIdx > 0 && !info.className) info.className = lines[newIdx - 1];
+    lines.splice(Math.max(0, newIdx - 1), newIdx > 0 ? 2 : 1);
+  }
+  const postIdx = lines.findIndex((l) => /^posted on .+ by .+$/i.test(l));
+  if (postIdx >= 0) { if (!info.poster) info.poster = lines[postIdx].replace(/^posted on .+? by\s+/i, '').trim(); lines.splice(postIdx, 1); }
 
   // Moodle: "by Dr. X - Thursday, 6 November 2026"
   const byIdx = lines.findIndex((l) => /^by .{2,60} - \w+day/i.test(l));

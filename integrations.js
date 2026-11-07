@@ -157,9 +157,33 @@ async function dueReminders() {
   return { sent };
 }
 
+// re-read email notifications saved by an older version of the email reader (runs once per reader version)
+const READER_VERSION = '3';
+async function reparseOldEmails() {
+  if ((await getSetting('email_reader_version')) === READER_VERSION) return 0;
+  const rows = await db.all("SELECT id, title, details FROM notifications WHERE kind = 'email' AND details IS NOT NULL");
+  let n = 0;
+  for (const r of rows) {
+    let d; try { d = JSON.parse(r.details); } catch { continue; }
+    const m = r.title.match(/^(Assignment|Announcement|New material|Question|Quiz|Comment):\s*(.+)$/);
+    const subject = m ? `New ${m[1].replace('New material', 'material').toLowerCase()}: "${m[2]}"` : r.title;
+    const info = parseEmail({ subject, from: d.sender || '', body: d.text || '' });
+    if (!info.className && d.className) info.className = d.className;
+    if (!info.poster && d.poster) info.poster = d.poster;
+    if (!info.due && d.due) info.due = d.due;
+    await db.run('UPDATE notifications SET title = ?, body = ?, details = ? WHERE id = ?', titleFor(info), summarize(info),
+      JSON.stringify({ sender: d.sender, className: info.className, poster: info.poster, due: info.due, todo: info.todo, text: info.text, kind: info.kind }), r.id);
+    n++;
+  }
+  await setSetting('email_reader_version', READER_VERSION);
+  return n;
+}
+
 async function tick() {
+  let reparsed = 0;
+  try { reparsed = await reparseOldEmails(); } catch (e) { console.error('reparse failed', e.message); }
   const last = await getSetting('tick_last');
-  if (last && Date.now() - new Date(last).getTime() < 60000) return { skipped: 'ran less than a minute ago' };
+  if (last && Date.now() - new Date(last).getTime() < 60000) return { skipped: 'ran less than a minute ago', reparsed };
   await setSetting('tick_last', new Date().toISOString());
   const out = { moodle: await moodleSync(), reminders: await dueReminders() };
   await db.run("DELETE FROM notifications WHERE created_at < datetime('now', '-60 days')");
