@@ -730,6 +730,14 @@ function focus() {
 // =====================================================================
 // COURSES
 // =====================================================================
+// linked Moodle course / Classroom classes
+const SRC_LABEL = { moodle: 'Moodle', lecture: 'Lecture', section: 'Section', lab: 'Lab' };
+const srcChip = (s) => `<span class="src-chip ${esc(s.type)}"><b>${SRC_LABEL[s.type] || s.type}</b> ${esc(s.name)}</span>`;
+const srcRow = (s) => `<div class="row src-row" style="flex-wrap:nowrap;margin-bottom:6px">
+  <select style="width:auto">${Object.entries(SRC_LABEL).map(([k, v]) => `<option value="${k}" ${s.type === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+  <input value="${esc(s.name)}" placeholder="e.g. FOE_PHY111_ Fall 2026">
+  <button type="button" class="btn danger small" data-src-del>✕</button></div>`;
+
 // short summary like "2 assignments · 1 quiz · 3 sheets"
 function courseCounts(c) {
   const parts = [[c.assignments, 'assignment'], [c.quizzes, 'quiz'], [c.exams, 'exam'], [c.sheets, 'sheet']]
@@ -750,7 +758,8 @@ async function courses(id) {
       <input type="color" name="color" value="#5b5bd6" style="width:54px;padding:3px" title="Course colour">
       <button class="btn">Add</button></form>` : ''}
     <div class="grid g3">${o.courses.map((c) => `<a class="card course-card" href="#/courses/${c.id}" style="border-top:4px solid ${esc(c.color)}">
-      <div class="row spread"><h3 style="margin:0">📁 ${esc(c.name)}</h3><span class="muted">›</span></div>
+      <div class="row spread"><h3 style="margin:0">${esc(c.name)}</h3><span class="muted">›</span></div>
+      ${c.code || c.sources?.length ? `<div class="small muted" style="margin-top:4px">${[c.code, ...(c.sources || []).filter((s) => s.type !== 'moodle').map((s) => SRC_LABEL[s.type])].filter(Boolean).map(esc).join(' · ')}</div>` : ''}
       <div class="course-chips">
         <span class="chip">📝 ${c.assignments} assignment${c.assignments === 1 ? '' : 's'}</span>
         <span class="chip">❓ ${c.quizzes} quiz${c.quizzes === 1 ? '' : 'zes'}</span>
@@ -791,8 +800,9 @@ async function courseDetail(id) {
 
   view.innerHTML = `
     <div class="page-head"><div><a href="#/courses" class="small">← All courses</a>
-      <h1 class="row" style="gap:10px"><span class="dot" style="background:${esc(c.color)};width:16px;height:16px"></span>${esc(c.name)}</h1>
-      <div class="muted small">${d.tasks.length} item${d.tasks.length === 1 ? '' : 's'} · ${d.materials.length} study sheet${d.materials.length === 1 ? '' : 's'}${d.questions.total ? ` · ${d.questions.mastered}/${d.questions.total} MCQs mastered` : ''}</div></div>
+      <h1 class="row" style="gap:10px"><span class="dot" style="background:${esc(c.color)};width:16px;height:16px"></span>${esc(c.name)}${c.code ? ` <span class="code-chip">${esc(c.code)}</span>` : ''}</h1>
+      <div class="muted small">${d.tasks.length} item${d.tasks.length === 1 ? '' : 's'} · ${d.materials.length} study sheet${d.materials.length === 1 ? '' : 's'}${d.questions.total ? ` · ${d.questions.mastered}/${d.questions.total} MCQs mastered` : ''}</div>
+      ${c.sources?.length ? `<div class="src-list">${c.sources.map(srcChip).join('')}</div>` : ''}</div>
       <div class="row">${!loose && d.questions.total ? `<a class="btn" href="#/practice?course_id=${c.id}">🎯 Practice this course</a>` : ''}
         ${can('courses') && !loose ? `<button class="btn ghost" id="edit-course">✏️ Edit</button>` : ''}</div></div>
     <div class="tabs">${tabs.map(([k, label, n]) => `<button data-ctab="${k}" class="${courseTab === k ? 'active' : ''}">${label} <span class="muted">${n}</span></button>`).join('')}</div>
@@ -820,13 +830,24 @@ async function courseDetail(id) {
     };
   })));
   $('#edit-course')?.addEventListener('click', () => openModal(`<h2>Edit course</h2>
-    <form class="form" id="ecf"><div><label>Name</label><input name="name" required value="${esc(c.name)}"></div>
+    <form class="form" id="ecf">
+      <div class="two"><div><label>Name</label><input name="name" required value="${esc(c.name)}"></div>
+        <div><label>Code</label><input name="code" value="${esc(c.code || '')}" placeholder="e.g. PHY-111"></div></div>
       <div><label>Colour</label><input type="color" name="color" value="${esc(c.color)}" style="width:70px;padding:3px"></div>
+      <div><label>Linked Moodle course & Classroom classes</label>
+        <div class="small muted" style="margin-bottom:6px">Moodle items and Classroom emails with these names are filed under this course. Use the exact name shown in Moodle/Classroom.</div>
+        <div id="src-rows">${(c.sources || []).map(srcRow).join('')}</div>
+        <button type="button" class="btn ghost small" id="src-add">+ Add linked class</button></div>
       <div class="row spread"><button type="button" class="btn danger" id="del-course">Delete course</button>
         <div class="row"><button type="button" class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn">Save</button></div></div></form>`, (m) => {
+    const bindRows = () => $$('[data-src-del]', m).forEach((b) => (b.onclick = () => b.closest('.src-row').remove()));
+    bindRows();
+    $('#src-add', m).onclick = () => { $('#src-rows', m).insertAdjacentHTML('beforeend', srcRow({ type: 'lecture', name: '' })); bindRows(); };
     $('#ecf', m).onsubmit = async (e) => {
       e.preventDefault();
-      try { await PUT(`/api/courses/${c.id}`, Object.fromEntries(new FormData(e.target))); closeModal(); toast('Saved'); refresh(); } catch (err) { fail(err); }
+      const b = Object.fromEntries(new FormData(e.target));
+      b.sources = $$('.src-row', m).map((r) => ({ type: $('select', r).value, name: $('input', r).value.trim() })).filter((s) => s.name);
+      try { await PUT(`/api/courses/${c.id}`, b); closeModal(); toast('Saved'); refresh(); } catch (err) { fail(err); }
     };
     $('#del-course', m).onclick = async () => {
       if (!confirm('Delete this course? Its assignments, quizzes, exams and sheets are kept, but move to “Not in a course”.')) return;
@@ -1049,12 +1070,15 @@ async function notificationsPage() {
 function showMessage(n) {
   const d = n.details || {};
   openModal(`<div class="msg">
+    ${d.courseName ? `<div class="msg-course">${icon('folder')}<b>${esc(d.courseName)}</b>${d.sourceType && SRC_LABEL[d.sourceType] ? ` <span class="src-chip ${esc(d.sourceType)}"><b>${SRC_LABEL[d.sourceType]}</b></span>` : ''}</div>` : ''}
     <div class="small muted">${[d.className, d.poster || d.sender].filter(Boolean).map(esc).join(' · ')} · ${timeAgo(n.created_at)}</div>
     <h2 style="margin:6px 0 10px">${esc(n.title)}</h2>
     ${d.due ? `<div class="msg-due">${icon('clock')}<b>Due:</b> ${esc(d.due)}</div>` : ''}
     ${d.todo?.length ? `<div class="msg-box"><h3>What to do</h3><ul>${d.todo.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></div>` : ''}
     ${d.text ? `<h3 style="margin-top:14px">Message</h3><div class="msg-text">${esc(d.text)}</div>` : ''}
-    <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn" onclick="closeModal()">Close</button></div></div>`);
+    <div class="row" style="justify-content:flex-end;margin-top:14px">
+      ${d.courseId ? `<a class="btn ghost" href="#/courses/${d.courseId}" onclick="closeModal()">Open course</a>` : ''}
+      <button class="btn" onclick="closeModal()">Close</button></div></div>`);
 }
 
 // ---- push subscription ----

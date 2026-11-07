@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const db = require('./db');
 const { notify, getSetting, setSetting } = require('./notify');
 const { parseEmail, summarize, titleFor } = require('./emailparse');
+const { matchCourse } = require('./coursematch');
 
 const COLORS = ['#0ea5e9', '#f59e0b', '#16a34a', '#db2777', '#7c3aed', '#dc2626', '#0d9488', '#ea580c', '#4f46e5', '#65a30d'];
 const once = async (key) => {
@@ -50,12 +51,16 @@ function classify(summary) {
 }
 const cleanTitle = (s) => s.replace(/\s+(is due|closes|deadline|due)\.?$/i, '').replace(/\s+should be completed\.?$/i, '').trim();
 
+// Moodle course name (its short name, e.g. "PHY-111-2026/2027-Fall") → course id.
+// Uses the course's code and linked classes; creates the course only if nothing matches.
 async function courseFor(name) {
   if (!name) return null;
-  const c = await db.get('SELECT id FROM courses WHERE lower(name) = lower(?)', name.trim());
-  if (c) return c.id;
+  const hit = await matchCourse(name);
+  if (hit) return hit.course.id;
   const n = (await db.get('SELECT COUNT(*) AS n FROM courses')).n;
-  return (await db.run('INSERT INTO courses (name, color) VALUES (?, ?)', name.trim().slice(0, 80), COLORS[n % COLORS.length])).lastInsertRowid;
+  const code = (name.match(/^[A-Z]{2,4}-?\d{3}/i) || [null])[0];
+  return (await db.run('INSERT INTO courses (name, color, code, sources) VALUES (?, ?, ?, ?)', name.trim().slice(0, 80), COLORS[n % COLORS.length],
+    code ? code.toUpperCase() : null, JSON.stringify([{ type: 'moodle', name: name.trim() }]))).lastInsertRowid;
 }
 
 async function moodleSync({ force = false } = {}) {
@@ -112,6 +117,13 @@ async function hookSecret() {
   if (!s) { s = crypto.randomBytes(18).toString('base64url'); await setSetting('hook_secret', s); }
   return s;
 }
+// which E-JUST course a Classroom class belongs to, and whether it's the lecture/section/lab
+async function courseInfo(className) {
+  try {
+    const hit = className && await matchCourse(className);
+    return hit ? { courseId: hit.course.id, courseName: hit.course.name, sourceType: hit.source.type || null } : {};
+  } catch { return {}; }
+}
 async function receiveEmails(messages = []) {
   const ownerId = Number(await getSetting('email_owner_id')) || null;
   const share = (await getSetting('email_share')) === 'all';
@@ -127,7 +139,8 @@ async function receiveEmails(messages = []) {
       audience: share ? 'all' : ownerId ? 'user' : 'admins', targetId: share ? null : ownerId,
       kind: 'email', title: titleFor(info), body: summarize(info),
       url: '#/notifications', // opens the full message inside E-JUST — no links out to Gmail
-      details: { sender: info.sender, className: info.className, poster: info.poster, due: info.due, todo: info.todo, text: info.text, kind: info.kind },
+      details: { sender: info.sender, className: info.className, poster: info.poster, due: info.due, todo: info.todo, text: info.text, kind: info.kind,
+        ...(await courseInfo(info.className)) },
     });
     created++;
   }
@@ -158,7 +171,7 @@ async function dueReminders() {
 }
 
 // re-read email notifications saved by an older version of the email reader (runs once per reader version)
-const READER_VERSION = '3';
+const READER_VERSION = '4';
 async function reparseOldEmails() {
   if ((await getSetting('email_reader_version')) === READER_VERSION) return 0;
   const rows = await db.all("SELECT id, title, details FROM notifications WHERE kind = 'email' AND details IS NOT NULL");
@@ -172,7 +185,7 @@ async function reparseOldEmails() {
     if (!info.poster && d.poster) info.poster = d.poster;
     if (!info.due && d.due) info.due = d.due;
     await db.run('UPDATE notifications SET title = ?, body = ?, details = ? WHERE id = ?', titleFor(info), summarize(info),
-      JSON.stringify({ sender: d.sender, className: info.className, poster: info.poster, due: info.due, todo: info.todo, text: info.text, kind: info.kind }), r.id);
+      JSON.stringify({ sender: d.sender, className: info.className, poster: info.poster, due: info.due, todo: info.todo, text: info.text, kind: info.kind, ...(await courseInfo(info.className)) }), r.id);
     n++;
   }
   await setSetting('email_reader_version', READER_VERSION);

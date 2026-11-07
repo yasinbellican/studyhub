@@ -180,6 +180,11 @@ const db = {
       const c = (await db.all('PRAGMA table_info(users)')).map((x) => x.name);
       if (!c.includes('notif_seen_at')) await db.run('ALTER TABLE users ADD COLUMN notif_seen_at TEXT');
     });
+    await step('courses.code/sources', async () => {
+      const c = (await db.all('PRAGMA table_info(courses)')).map((x) => x.name);
+      if (!c.includes('code')) await db.run('ALTER TABLE courses ADD COLUMN code TEXT');               // e.g. PHY-111
+      if (!c.includes('sources')) await db.run("ALTER TABLE courses ADD COLUMN sources TEXT DEFAULT '[]'"); // JSON [{type, name}]
+    });
     await step('notifications.details', async () => {
       const c = (await db.all('PRAGMA table_info(notifications)')).map((x) => x.name);
       if (!c.includes('details')) await db.run('ALTER TABLE notifications ADD COLUMN details TEXT'); // JSON: class, due, to-do, full text

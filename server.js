@@ -9,6 +9,7 @@ const { generateMCQs, aiAvailable } = require('./ai');
 // call is guarded, so a problem in them can never stop the rest of the site from working.
 const lazy = {};
 const N = () => (lazy.n ||= require('./notify'));
+const { parseSources } = require('./coursematch');
 const integrations = new Proxy({}, { get: (_, fn) => async (...args) => (lazy.i ||= require('./integrations'))[fn](...args) });
 async function notify(o) { try { return await N().notify(o); } catch (e) { console.error('notify failed:', e.message); } }
 const listFor = (u) => N().listFor(u);
@@ -303,7 +304,8 @@ app.delete('/api/admin/members/:id', ...A, async (req, res) => {
 });
 
 // ---------- courses ----------
-app.get('/api/courses', auth, async (req, res) => res.json(await db.all('SELECT * FROM courses ORDER BY name')));
+const withSources = (c) => (c ? { ...c, sources: parseSources(c.sources) } : c);
+app.get('/api/courses', auth, async (req, res) => res.json((await db.all('SELECT * FROM courses ORDER BY name')).map(withSources)));
 
 // every course with how many assignments / quizzes / exams / sheets / questions it holds
 const COUNTS_SQL = (where) => `
@@ -317,7 +319,7 @@ app.get('/api/courses/overview', auth, async (req, res) => {
       (SELECT COUNT(*) FROM questions q JOIN progress p ON p.question_id = q.id AND p.user_id = ? WHERE q.course_id = c.id AND p.reps >= 4) AS mastered
     FROM courses c ORDER BY c.name`, req.user.id);
   const none = await db.get(`SELECT ${COUNTS_SQL((a) => `${a}.course_id IS NULL`)}`);
-  res.json({ courses, uncategorized: none });
+  res.json({ courses: courses.map(withSources), uncategorized: none });
 });
 
 // everything that belongs to one course ('none' = items without a course)
@@ -338,15 +340,26 @@ app.get('/api/courses/:id/content', auth, async (req, res) => {
     FROM materials m WHERE ${match('m')} ORDER BY m.created_at DESC`, req.user.id);
   const qs = await db.get(`SELECT COUNT(*) AS total, COALESCE(SUM(p.reps >= 4), 0) AS mastered
     FROM questions q LEFT JOIN progress p ON p.question_id = q.id AND p.user_id = ? WHERE ${match('q')}`, req.user.id);
-  res.json({ course, tasks, materials, questions: qs });
+  res.json({ course: none ? course : withSources(course), tasks, materials, questions: qs });
 });
+// code (e.g. PHY-111) and linked classes: [{ type: moodle|lecture|section|lab, name }]
+function courseExtras(b) {
+  const code = b.code == null ? null : String(b.code).trim().slice(0, 30) || null;
+  const sources = Array.isArray(b.sources) ? JSON.stringify(parseSources(JSON.stringify(b.sources))) : null;
+  return { code, sources };
+}
 app.post('/api/courses', ...can('courses'), async (req, res) => {
   if (!req.body.name) return res.status(400).json({ error: 'Name required' });
-  const r = await db.run('INSERT INTO courses (name, color) VALUES (?, ?)', req.body.name, req.body.color || '#6366f1');
+  const { code, sources } = courseExtras(req.body);
+  const r = await db.run('INSERT INTO courses (name, color, code, sources) VALUES (?, ?, ?, ?)', String(req.body.name).trim(), req.body.color || '#6366f1', code, sources || '[]');
   res.json({ id: r.lastInsertRowid });
 });
 app.put('/api/courses/:id', ...can('courses'), async (req, res) => {
-  await db.run('UPDATE courses SET name = ?, color = ? WHERE id = ?', req.body.name, req.body.color, req.params.id);
+  const cur = await db.get('SELECT * FROM courses WHERE id = ?', req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Course not found' });
+  const { code, sources } = courseExtras(req.body);
+  await db.run('UPDATE courses SET name = ?, color = ?, code = ?, sources = ? WHERE id = ?',
+    String(req.body.name || cur.name).trim(), req.body.color || cur.color, 'code' in req.body ? code : cur.code, sources ?? cur.sources ?? '[]', cur.id);
   res.json({ ok: true });
 });
 app.delete('/api/courses/:id', ...can('courses'), async (req, res) => {
