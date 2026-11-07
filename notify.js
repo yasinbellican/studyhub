@@ -38,9 +38,9 @@ async function sendPush(id, audience, targetId, payload) {
 }
 
 /** Create a notification and push it. kind: task | sheet | due | email | moodle | join | info */
-async function notify({ audience = 'all', targetId = null, kind = 'info', title, body = '', url = '#/dashboard' }) {
-  const r = await db.run('INSERT INTO notifications (audience, target_id, kind, title, body, url) VALUES (?, ?, ?, ?, ?, ?)',
-    audience, targetId, kind, String(title).slice(0, 200), String(body || '').slice(0, 600), url);
+async function notify({ audience = 'all', targetId = null, kind = 'info', title, body = '', url = '#/dashboard', details = null }) {
+  const r = await db.run('INSERT INTO notifications (audience, target_id, kind, title, body, url, details) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    audience, targetId, kind, String(title).slice(0, 200), String(body || '').slice(0, 600), url, details ? JSON.stringify(details) : null);
   try { await sendPush(r.lastInsertRowid, audience, targetId, { title, body, url }); } catch (e) { console.error('push failed:', e.message); }
   return r.lastInsertRowid;
 }
@@ -50,7 +50,10 @@ async function listFor(user, limit = 60) {
   const rows = await db.all(`SELECT n.* FROM notifications n JOIN (SELECT ? AS id, ? AS role, ? AS section_id) u
     WHERE ${VISIBLE} ORDER BY n.id DESC LIMIT ?`, u.id, u.role, u.section_id ?? -1, limit);
   const seen = u.notif_seen_at || '';
-  for (const n of rows) n.unread = n.created_at > seen;
+  for (const n of rows) {
+    n.unread = n.created_at > seen;
+    try { n.details = n.details ? JSON.parse(n.details) : null; } catch { n.details = null; }
+  }
   return { items: rows, unread: rows.filter((n) => n.unread).length };
 }
 

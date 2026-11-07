@@ -180,6 +180,10 @@ const db = {
       const c = (await db.all('PRAGMA table_info(users)')).map((x) => x.name);
       if (!c.includes('notif_seen_at')) await db.run('ALTER TABLE users ADD COLUMN notif_seen_at TEXT');
     });
+    await step('notifications.details', async () => {
+      const c = (await db.all('PRAGMA table_info(notifications)')).map((x) => x.name);
+      if (!c.includes('details')) await db.run('ALTER TABLE notifications ADD COLUMN details TEXT'); // JSON: class, due, to-do, full text
+    });
     await step('tasks.source/external_id', async () => {
       const c = (await db.all('PRAGMA table_info(tasks)')).map((x) => x.name);
       if (!c.includes('source')) await db.run("ALTER TABLE tasks ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'");

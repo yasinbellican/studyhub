@@ -1025,17 +1025,36 @@ async function notificationsPage() {
     ${state === 'ios' ? '<div class="banner">On iPhone/iPad, first install E-JUST (Share → Add to Home Screen) and open it from the home screen — then you can turn on notifications here.</div>' : ''}
     ${state === 'unsupported' ? '<div class="banner">This browser can\'t show notifications when the app is closed. You\'ll still see them here.</div>' : ''}
     <div class="list">${items.length ? items.map((n) => {
-      const ext = /^https?:/.test(n.url);
-      return `<a class="notif ${n.unread ? 'unread' : ''}" href="${esc(n.url || '#/notifications')}" ${ext ? 'target="_blank" rel="noopener"' : ''}>
+      const d = n.details;
+      // emails open inside E-JUST (details), app items go to their page; never link out to Gmail
+      const href = d || /^https?:/.test(n.url) ? '#/notifications' : n.url || '#/notifications';
+      return `<a class="notif ${n.unread ? 'unread' : ''}" href="${esc(href)}" ${d ? `data-detail="${n.id}"` : ''}>
         <span class="n-ic ${esc(n.kind)}">${icon(NOTIF_ICON[n.kind] || 'bell')}</span>
-        <span class="n-body"><span class="n-title">${esc(n.title)}</span>${n.body ? `<div class="n-text">${esc(n.body)}</div>` : ''}</span>
+        <span class="n-body"><span class="n-title">${esc(n.title)}</span>
+          ${d ? `<div class="n-meta">${[d.className, d.poster].filter(Boolean).map(esc).join(' · ')}</div>
+            ${d.due ? `<div class="n-due">${icon('clock')}Due ${esc(d.due)}</div>` : ''}
+            ${d.todo?.length ? `<ul class="n-todo">${d.todo.slice(0, 3).map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : n.body ? `<div class="n-text">${esc(n.body)}</div>` : ''}`
+            : n.body ? `<div class="n-text">${esc(n.body)}</div>` : ''}</span>
         <span class="n-time">${timeAgo(n.created_at)}</span></a>`; }).join('')
       : '<div class="card empty">No notifications yet.</div>'}</div>`;
+  $$('[data-detail]').forEach((a) => (a.onclick = (e) => { e.preventDefault(); showMessage(items.find((n) => n.id == a.dataset.detail)); }));
   await POST('/api/notifications/seen').catch(() => {});
   $$('.bell-count').forEach((b) => b.classList.add('hidden'));
   $('#push-on')?.addEventListener('click', async () => { await enablePush(); notificationsPage(); });
   $('#push-off')?.addEventListener('click', async () => { await disablePush(); notificationsPage(); });
   $('#push-test')?.addEventListener('click', async () => { await POST('/api/push/test').catch(fail); toast('Test sent — it should pop up in a few seconds'); });
+}
+
+// full message shown inside the app: what it says + what to do
+function showMessage(n) {
+  const d = n.details || {};
+  openModal(`<div class="msg">
+    <div class="small muted">${[d.className, d.poster || d.sender].filter(Boolean).map(esc).join(' · ')} · ${timeAgo(n.created_at)}</div>
+    <h2 style="margin:6px 0 10px">${esc(n.title)}</h2>
+    ${d.due ? `<div class="msg-due">${icon('clock')}<b>Due:</b> ${esc(d.due)}</div>` : ''}
+    ${d.todo?.length ? `<div class="msg-box"><h3>What to do</h3><ul>${d.todo.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></div>` : ''}
+    ${d.text ? `<h3 style="margin-top:14px">Message</h3><div class="msg-text">${esc(d.text)}</div>` : ''}
+    <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn" onclick="closeModal()">Close</button></div></div>`);
 }
 
 // ---- push subscription ----
@@ -1071,8 +1090,9 @@ async function disablePush() {
 // =====================================================================
 function gmailScript(hookUrl, secret) {
   return `// E-JUST — forwards new university/Moodle emails to your E-JUST web app.
-// Runs inside YOUR Gmail account on Google's servers. Nothing is shared except
-// the subject, sender and a short preview of matching emails.
+// Version 2 — sends the message text so E-JUST can show what it says and what to do.
+// Runs inside YOUR Gmail account on Google's servers. Only emails matching SEARCH
+// are sent (subject, sender and text — no attachments).
 const WEBAPP = '${hookUrl}';
 const KEY = '${secret}';
 // Which emails to forward (Gmail search). Change it to match your university:
@@ -1080,22 +1100,21 @@ const SEARCH = 'newer_than:2d (from:moodle OR from:ejust.edu.eg OR subject:(assi
 
 function checkEmails() {
   const props = PropertiesService.getScriptProperties();
-  const seen = JSON.parse(props.getProperty('seen') || '[]');
+  const seen = JSON.parse(props.getProperty('seen2') || '[]');
   const messages = [];
   GmailApp.search(SEARCH, 0, 30).forEach(function (thread) {
     thread.getMessages().forEach(function (m) {
       const id = m.getId();
       if (seen.indexOf(id) !== -1) return;
       messages.push({ id: id, from: m.getFrom(), subject: m.getSubject(), date: m.getDate().toISOString(),
-        snippet: m.getPlainBody().replace(/\\s+/g, ' ').slice(0, 300),
-        link: 'https://mail.google.com/mail/u/0/#inbox/' + thread.getId() });
+        body: m.getPlainBody().slice(0, 6000) });
       seen.push(id);
     });
   });
   // also wakes the web app so Moodle sync and deadline reminders run
   UrlFetchApp.fetch(WEBAPP, { method: 'post', contentType: 'application/json',
     headers: { 'X-EJUST-Key': KEY }, payload: JSON.stringify({ messages: messages }), muteHttpExceptions: true });
-  props.setProperty('seen', JSON.stringify(seen.slice(-500)));
+  props.setProperty('seen2', JSON.stringify(seen.slice(-500)));
 }
 
 // Run this ONCE: it makes checkEmails run every 10 minutes.

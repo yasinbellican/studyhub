@@ -6,6 +6,7 @@
 const crypto = require('crypto');
 const db = require('./db');
 const { notify, getSetting, setSetting } = require('./notify');
+const { parseEmail, summarize, titleFor } = require('./emailparse');
 
 const COLORS = ['#0ea5e9', '#f59e0b', '#16a34a', '#db2777', '#7c3aed', '#dc2626', '#0d9488', '#ea580c', '#4f46e5', '#65a30d'];
 const once = async (key) => {
@@ -116,13 +117,17 @@ async function receiveEmails(messages = []) {
   const share = (await getSetting('email_share')) === 'all';
   let created = 0;
   for (const m of messages.slice(0, 50)) {
-    if (!m?.id || !(await once('email:' + m.id))) continue;
-    const from = String(m.from || '').replace(/<.*>/, '').replace(/"/g, '').trim();
+    if (!m?.id) continue;
+    // script v2 sends the full text; let it replace the short preview an older script already sent
+    const full = typeof m.body === 'string' && m.body.length > 0;
+    if (!(await once((full ? 'email2:' : 'email:') + m.id))) continue;
+    const info = parseEmail({ subject: m.subject, from: m.from, body: m.body, snippet: m.snippet });
+    if (full) await db.run("DELETE FROM notifications WHERE kind = 'email' AND (title = ? OR title = ?)", String(m.subject || '').slice(0, 200), titleFor(info));
     await notify({
       audience: share ? 'all' : ownerId ? 'user' : 'admins', targetId: share ? null : ownerId,
-      kind: 'email', title: String(m.subject || '(no subject)').slice(0, 200),
-      body: `${from ? from + ' — ' : ''}${String(m.snippet || '').slice(0, 280)}`,
-      url: m.link && /^https:\/\/mail\.google\.com\//.test(m.link) ? m.link : '#/notifications',
+      kind: 'email', title: titleFor(info), body: summarize(info),
+      url: '#/notifications', // opens the full message inside E-JUST — no links out to Gmail
+      details: { sender: info.sender, className: info.className, poster: info.poster, due: info.due, todo: info.todo, text: info.text, kind: info.kind },
     });
     created++;
   }
