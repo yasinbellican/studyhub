@@ -323,3 +323,72 @@ img, iframe { max-width: 100%; }
 .n-del { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 6px 8px; border-radius: 6px; }
 .n-del:hover { background: var(--red-soft); color: var(--red); }
 @media (hover: hover) { .notif .n-del { opacity: .35; } .notif:hover .n-del { opacity: 1; } }
+
+/* ---------- smooth page changes ---------- */
+.progress { position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 80; pointer-events: none; opacity: 0; transition: opacity .15s; overflow: hidden; }
+.progress.on { opacity: 1; }
+.progress::before { content: ''; position: absolute; inset: 0; width: 40%; background: linear-gradient(90deg, transparent, var(--primary), transparent); animation: slide 1s linear infinite; }
+@keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(350%); } }
+.view.enter { animation: viewIn .16s ease-out; }
+@keyframes viewIn { from { opacity: .35; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+#nav a, .btn, .seg > *, .task, .tick, .course-card, .notif, .tt-slot { transition: background-color .12s, color .12s, border-color .12s, box-shadow .12s, opacity .15s, transform .12s; }
+@media (prefers-reduced-motion: reduce) { .view.enter { animation: none; } * { transition: none !important; } }
+
+/* ---------- segmented tabs (To do / Done / Past, Users tabs) ---------- */
+.seg { display: flex; gap: 4px; padding: 4px; margin-bottom: 14px; background: #e9ebf3; border-radius: 12px; }
+.seg > * { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 8px; border: 0; border-radius: 9px; background: transparent;
+  font: inherit; font-weight: 600; color: var(--muted); cursor: pointer; text-decoration: none; text-align: center; min-height: 44px; }
+.seg > *:hover { color: var(--text); }
+.seg > .active { background: #fff; color: var(--text); box-shadow: var(--shadow); }
+.seg-n { font-size: 12px; font-weight: 700; min-width: 22px; padding: 1px 7px; border-radius: 99px; background: rgba(0, 0, 0, .07); color: inherit; }
+.seg > .active .seg-n { background: var(--primary-soft); color: var(--primary); }
+.seg-n.alert { background: var(--red); color: #fff; }
+
+/* ---------- task rows: big round tick on the left ---------- */
+.task { display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; background: var(--card); border-radius: 12px; box-shadow: var(--shadow); }
+.task .grow { flex: 1; min-width: 0; }
+.task .title { font-weight: 600; font-size: 15.5px; overflow-wrap: anywhere; }
+.task.done .title { text-decoration: line-through; color: var(--muted); }
+.task.past:not(.done) { opacity: .92; }
+.task-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: 4px; font-size: 13px; }
+.task-notes { margin-top: 4px; white-space: pre-line; }
+.tick { flex: none; width: 34px; height: 34px; margin-top: 1px; border-radius: 50%; border: 2px solid #c5c9dc; background: #fff; color: transparent; cursor: pointer; display: grid; place-items: center; padding: 0; }
+.tick .ic { width: 20px; height: 20px; stroke-width: 2.6; }
+.tick:hover { border-color: var(--green); color: #b7e4c7; }
+.tick.on { background: var(--green); border-color: var(--green); color: #fff; }
+.tick:active { transform: scale(.9); }
+.task-actions { display: flex; align-items: center; gap: 4px; flex: none; }
+.icon-btn { width: 38px; height: 38px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); cursor: pointer; display: grid; place-items: center; padding: 0; }
+.icon-btn:hover { background: #eef0f5; color: var(--text); }
+.icon-btn .ic { width: 19px; height: 19px; }
+
+/* ---------- Add content ---------- */
+.type-pick { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.type-pick button { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 14px 8px; border: 2px solid var(--line); border-radius: 12px; background: #fff; font: inherit; font-weight: 600; color: var(--muted); cursor: pointer; }
+.type-pick button .ic { width: 24px; height: 24px; }
+.type-pick button:hover { border-color: var(--primary); color: var(--text); }
+.type-pick button.active { border-color: var(--primary); background: var(--primary-soft); color: var(--primary); }
+.sec-dues { padding: 12px; border: 1px dashed var(--line); border-radius: 10px; }
+.tt-fill { margin: 2px 0 10px; }
+
+/* ---------- timetable ---------- */
+.week-card { margin-bottom: 14px; border-left: 4px solid var(--primary); }
+.tt-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; align-items: start; }
+.tt-day { background: #eef0f6; border-radius: 12px; padding: 10px; min-height: 90px; }
+.tt-day.today { outline: 2px solid var(--primary); }
+.tt-day h3 { margin: 0 0 8px; font-size: 14px; display: flex; align-items: center; gap: 6px; }
+.tt-slot { background: #fff; border-radius: 9px; border-left: 4px solid var(--primary); padding: 8px 10px; margin-bottom: 7px; box-shadow: var(--shadow); }
+.tt-slot[data-slot] { cursor: pointer; }
+.tt-slot[data-slot]:hover { box-shadow: 0 3px 12px rgba(20, 20, 50, .14); }
+.tt-slot.off { opacity: .45; }
+.tt-time { font-size: 12.5px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tt-name { font-weight: 600; margin: 1px 0 4px; overflow-wrap: anywhere; }
+.tt-sub { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font-size: 12.5px; }
+.tt-none { font-size: 13px; color: var(--muted); padding: 6px 2px; }
+
+@media (max-width: 600px) {
+  .task { padding: 11px 12px; gap: 10px; }
+  .task-actions { flex-direction: column; }
+  .seg > * { padding: 9px 4px; font-size: 14px; }
+  .tt-grid { grid-template-columns: 1fr; }
+}

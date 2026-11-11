@@ -18,6 +18,7 @@
 <body>
   <div id="auth" class="auth hidden"></div>
 
+  <div id="progress" class="progress"></div>
   <div id="shell" class="shell hidden">
     <!-- top bar: only shown on phones/tablets -->
     <header class="topbar">
@@ -36,16 +37,16 @@
       <nav id="nav">
         <a href="#/dashboard" data-route="dashboard"><i data-icon="home"></i>Dashboard</a>
         <a href="#/tasks" data-route="tasks"><i data-icon="check"></i>Assignments & Quizzes</a>
+        <a href="#/timetable" data-route="timetable"><i data-icon="grid"></i>Timetable</a>
         <a href="#/materials" data-route="materials"><i data-icon="file"></i>Study Sheets</a>
         <a href="#/practice" data-route="practice"><i data-icon="target"></i>Practice MCQs</a>
         <a href="#/planner" data-route="planner"><i data-icon="calendar"></i>Planner</a>
         <a href="#/focus" data-route="focus"><i data-icon="clock"></i>Focus Timer</a>
         <a href="#/courses" data-route="courses"><i data-icon="folder"></i>Courses</a>
         <a href="#/notifications" data-route="notifications"><i data-icon="bell"></i>Notifications</a>
+        <a href="#/add" data-route="add" data-perm="tasks,sheets" class="hidden"><i data-icon="plus"></i>Add content</a>
         <a href="#/questions" data-route="questions" data-perm="questions" class="hidden"><i data-icon="list"></i>Question Bank</a>
-        <a href="#/class" data-route="class" class="admin-only hidden"><i data-icon="users"></i>Class & Sections</a>
-        <a href="#/permissions" data-route="permissions" class="admin-only hidden"><i data-icon="lock"></i>Permissions</a>
-        <a href="#/connections" data-route="connections" class="admin-only hidden"><i data-icon="link"></i>Connections</a>
+        <a href="#/users" data-route="users" class="admin-only hidden"><i data-icon="users"></i>Users</a>
       </nav>
       <div class="sidebar-foot">
         <button id="install-btn" class="btn soft small install-btn hidden"><i data-icon="download"></i>Install app</button>

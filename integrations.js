@@ -86,6 +86,7 @@ async function moodleSync({ force = false } = {}) {
     const summary = ev.SUMMARY?.value || ''; const uid = ev.UID?.value; const due = icalDate(ev.DTEND || ev.DTSTART);
     const type = classify(summary);
     if (!uid || !due || !type || new Date(due).getTime() < cutoff) continue;
+    if (type !== 'assignment' && new Date(due).getTime() < Date.now()) continue; // past quizzes/exams are gone for good
     const title = cleanTitle(summary).slice(0, 200);
     const courseName = (ev.CATEGORIES?.value || '').split(',')[0];
     const notes = (ev.DESCRIPTION?.value || '').replace(/<[^>]+>/g, '').trim().slice(0, 1000);
@@ -127,6 +128,8 @@ async function courseInfo(className) {
 async function receiveEmails(messages = []) {
   const ownerId = Number(await getSetting('email_owner_id')) || null;
   const share = (await getSetting('email_share')) === 'all';
+  const esid = Number(await getSetting('email_section_id')) || null; // the section this Gmail's tutorial classes belong to
+  const emailSection = esid ? await db.get('SELECT id, name FROM sections WHERE id = ?', esid) : null;
   let created = 0;
   for (const m of messages.slice(0, 50)) {
     if (!m?.id) continue;
@@ -135,13 +138,28 @@ async function receiveEmails(messages = []) {
     if (!(await once((full ? 'email2:' : 'email:') + m.id))) continue;
     const info = parseEmail({ subject: m.subject, from: m.from, body: m.body, snippet: m.snippet });
     if (full) await db.run("DELETE FROM notifications WHERE kind = 'email' AND (title = ? OR title = ?)", String(m.subject || '').slice(0, 200), titleFor(info));
+    const ci = await courseInfo(info.className);
+    // Who sees it:
+    //  • not shared, or not from a class linked to a course → only the Gmail's owner (keeps personal mail private)
+    //  • from a tutorial ("section") class → the full homework goes only to the section this Gmail belongs to;
+    //    other sections just hear that it was posted, because their own tutorial may set different homework
+    //  • from a lecture / lab / Moodle class → the whole class
+    let audience = ownerId ? 'user' : 'admins', targetId = ownerId, others = [];
+    if (share && ci.courseId) {
+      if (ci.sourceType === 'section' && emailSection) {
+        audience = 'section'; targetId = emailSection.id;
+        others = (await db.all('SELECT id FROM sections WHERE id != ?', emailSection.id)).map((r) => r.id);
+      } else { audience = 'all'; targetId = null; }
+    }
     await notify({
-      audience: share ? 'all' : ownerId ? 'user' : 'admins', targetId: share ? null : ownerId,
-      kind: 'email', title: titleFor(info), body: summarize(info),
+      audience, targetId, kind: 'email', title: titleFor(info), body: summarize(info),
       url: '#/notifications', // opens the full message inside E-JUST — no links out to Gmail
-      details: { sender: info.sender, className: info.className, poster: info.poster, due: info.due, todo: info.todo, text: info.text, kind: info.kind,
-        ...(await courseInfo(info.className)) },
+      details: { sender: info.sender, className: info.className, poster: info.poster, due: info.due, todo: info.todo, text: info.text, kind: info.kind, ...ci },
     });
+    for (const sid of others) {
+      await notify({ audience: 'section', targetId: sid, kind: 'info', title: `${ci.courseName}: tutorial ${info.kind === 'email' ? 'post' : info.kind} for ${emailSection.name}`,
+        body: `“${info.title}” was posted in ${emailSection.name}'s tutorial class. Your own tutorial may set different homework — check your class.`, url: `#/courses/${ci.courseId}` });
+    }
     created++;
   }
   return { created };
@@ -151,11 +169,12 @@ async function receiveEmails(messages = []) {
 async function dueReminders() {
   const now = Date.now(), soon = new Date(now + 24 * 3600000).toISOString(), nowIso = new Date(now).toISOString();
   const sections = await db.all('SELECT id FROM sections');
-  const tasks = await db.all(`SELECT t.id, t.title, t.type, t.due_at, t.course_id, c.name AS course FROM tasks t LEFT JOIN courses c ON c.id = t.course_id
+  const tasks = await db.all(`SELECT t.id, t.title, t.type, t.due_at, t.course_id, t.section_id, c.name AS course FROM tasks t LEFT JOIN courses c ON c.id = t.course_id
     WHERE (t.due_at BETWEEN ? AND ?) OR t.id IN (SELECT task_id FROM task_due WHERE due_at BETWEEN ? AND ?)`, nowIso, soon, nowIso, soon);
   const overrides = await db.all('SELECT task_id, section_id, due_at FROM task_due');
   let sent = 0;
   for (const t of tasks) for (const s of sections) {
+    if (t.section_id && t.section_id !== s.id) continue;
     const due = overrides.find((o) => o.task_id === t.id && o.section_id === s.id)?.due_at || t.due_at;
     if (!due) continue;
     const left = new Date(due).getTime() - now;
@@ -192,16 +211,31 @@ async function reparseOldEmails() {
   return n;
 }
 
+// Quizzes and exams are deleted for good once their date has passed (for every section).
+async function purgePastTests() {
+  const now = new Date().toISOString();
+  const rows = await db.all(`SELECT t.id FROM tasks t WHERE t.type IN ('quiz', 'exam')
+    AND (t.due_at IS NULL OR t.due_at < ?)
+    AND (t.due_at IS NOT NULL OR EXISTS (SELECT 1 FROM task_due d WHERE d.task_id = t.id))
+    AND NOT EXISTS (SELECT 1 FROM task_due d WHERE d.task_id = t.id AND d.due_at >= ?)`, now, now);
+  const ids = rows.map((r) => r.id);
+  if (ids.length) {
+    const list = ids.join(',');
+    await db.batch(['task_due', 'user_tasks', 'plan_items'].map((t) => [`DELETE FROM ${t} WHERE task_id IN (${list})`]).concat([[`DELETE FROM tasks WHERE id IN (${list})`]]));
+  }
+  return ids.length;
+}
+
 async function tick() {
   let reparsed = 0;
   try { reparsed = await reparseOldEmails(); } catch (e) { console.error('reparse failed', e.message); }
   const last = await getSetting('tick_last');
   if (last && Date.now() - new Date(last).getTime() < 60000) return { skipped: 'ran less than a minute ago', reparsed };
   await setSetting('tick_last', new Date().toISOString());
-  const out = { moodle: await moodleSync(), reminders: await dueReminders() };
+  const out = { moodle: await moodleSync(), reminders: await dueReminders(), purged: await purgePastTests() };
   await db.run("DELETE FROM notifications WHERE created_at < datetime('now', '-60 days')");
   await db.run("DELETE FROM sent_once WHERE at < datetime('now', '-120 days')");
   return out;
 }
 
-module.exports = { moodleSync, receiveEmails, dueReminders, tick, hookSecret, parseICal };
+module.exports = { moodleSync, receiveEmails, dueReminders, purgePastTests, tick, hookSecret, parseICal };

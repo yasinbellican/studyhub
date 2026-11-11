@@ -88,15 +88,23 @@ async function startSession(res, userId) {
   await db.run('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)', token, userId, expires.toISOString());
   res.cookie('sid', token, { httpOnly: true, sameSite: 'lax', secure: PROD, expires });
 }
+// Signed-in users are remembered for a few seconds so each request doesn't need its own database lookup.
+const authCache = new Map(); // token -> { user, until }
+const AUTH_TTL = 20000;
+const forgetAuth = () => authCache.clear(); // call after roles / sections / permissions change
 async function auth(req, res, next) {
   const token = req.cookies.sid;
+  const hit = token && authCache.get(token);
+  if (hit && hit.until > Date.now()) { req.user = { ...hit.user }; return next(); }
   const row = token && await db.get(`SELECT u.id, u.name, u.username, u.role, u.section_id, u.permissions, s.name AS section_name
     FROM sessions x JOIN users u ON u.id = x.user_id LEFT JOIN sections s ON s.id = u.section_id
     WHERE x.token = ? AND x.expires_at > ? AND u.status = 'approved'`, token, nowISO());
   if (!row) return res.status(401).json({ error: 'Not signed in' });
   row.perms = effectivePerms(row);
   delete row.permissions;
-  req.user = row;
+  if (authCache.size > 500) authCache.clear();
+  authCache.set(token, { user: row, until: Date.now() + AUTH_TTL });
+  req.user = { ...row };
   next();
 }
 function admin(req, res, next) {
@@ -134,18 +142,28 @@ async function checkSection(sectionId) {
 }
 
 // Task rows as one student sees them: their section's due date + their own status/grade
-function taskQuery(where = '1=1') {
-  return `SELECT t.id, t.course_id, t.title, t.type, t.priority, t.notes, t.max_grade, t.created_at,
-      t.due_at AS default_due_at, COALESCE(td.due_at, t.due_at) AS due_at,
+// Rules built in:
+//  • quizzes and exams vanish the moment their date has passed (they're deleted for good by purgePastTests)
+//  • homework marked "only for section X" is shown to that section only (all: true shows everything, for editors)
+const DUE = 'COALESCE(td.due_at, t.due_at)';
+function taskQuery(where = '1=1', { all = false } = {}) {
+  return `SELECT t.id, t.course_id, t.title, t.type, t.priority, t.notes, t.max_grade, t.created_at, t.source,
+      t.due_at AS default_due_at, ${DUE} AS due_at,
       COALESCE(ut.status, 'todo') AS status, ut.grade,
+      t.section_id AS only_section_id, os.name AS only_section_name,
       c.name AS course_name, c.color AS course_color
     FROM tasks t
     LEFT JOIN task_due td ON td.task_id = t.id AND td.section_id = $section
     LEFT JOIN user_tasks ut ON ut.task_id = t.id AND ut.user_id = $uid
     LEFT JOIN courses c ON c.id = t.course_id
-    WHERE ${where}`;
+    LEFT JOIN sections os ON os.id = t.section_id
+    WHERE (${where})
+      AND NOT (t.type IN ('quiz', 'exam') AND ${DUE} IS NOT NULL AND ${DUE} < $now)
+      ${all ? '' : 'AND (t.section_id IS NULL OR t.section_id = $section)'}`;
 }
-const tp = (req, extra = {}) => ({ $section: req.user.section_id ?? -1, $uid: req.user.id, ...extra });
+const tp = (req, extra = {}) => ({ $section: req.user.section_id ?? -1, $uid: req.user.id, $now: nowISO(), ...extra });
+const deleteTasks = (ids) => (ids.length ? db.batch(['task_due', 'user_tasks', 'plan_items'].map((t) => [`DELETE FROM ${t} WHERE task_id IN (${ids.join(',')})`])
+  .concat([[`DELETE FROM tasks WHERE id IN (${ids.join(',')})`]])) : null);
 
 // ---------- class info & joining ----------
 app.get('/api/class/status', async (req, res) => {
@@ -196,7 +214,7 @@ app.post('/api/register', async (req, res) => {
   if (await usernameTaken(username)) return res.status(409).json({ error: 'That username is already taken — try another one' });
   await db.run("INSERT INTO users (name, username, pass_hash, status, section_id) VALUES (?, ?, ?, 'pending', ?)",
     name.trim(), username, hashPassword(password), sid);
-  await notify({ audience: 'admins', kind: 'join', title: `Join request: ${name.trim()}`, body: `@${username} wants to join. Approve or reject it in Class & Sections.`, url: '#/class' });
+  await notify({ audience: 'admins', kind: 'join', title: `Join request: ${name.trim()}`, body: `@${username} wants to join. Approve or reject it in Users.`, url: '#/users' });
   res.json({ pending: true });
 });
 
@@ -209,7 +227,7 @@ app.post('/api/login', async (req, res) => {
   res.json({ ok: true });
 });
 app.post('/api/logout', async (req, res) => {
-  if (req.cookies.sid) await db.run('DELETE FROM sessions WHERE token = ?', req.cookies.sid);
+  if (req.cookies.sid) { authCache.delete(req.cookies.sid); await db.run('DELETE FROM sessions WHERE token = ?', req.cookies.sid); }
   res.clearCookie('sid');
   res.json({ ok: true });
 });
@@ -219,6 +237,7 @@ app.get('/api/sections', auth, async (req, res) => res.json(await db.all('SELECT
 // only admins may change sections (students keep the section they joined with)
 app.patch('/api/me/section', ...A, async (req, res) => {
   await db.run('UPDATE users SET section_id = ? WHERE id = ?', await checkSection(req.body.section_id), req.user.id);
+  forgetAuth();
   res.json({ ok: true });
 });
 
@@ -261,9 +280,12 @@ app.delete('/api/admin/sections/:id', ...A, async (req, res) => {
   const id = Number(req.params.id);
   await db.batch([
     ['DELETE FROM task_due WHERE section_id = ?', id],
+    ['DELETE FROM timetable WHERE section_id = ?', id],
+    ['UPDATE tasks SET section_id = NULL WHERE section_id = ?', id],
     ['UPDATE users SET section_id = NULL WHERE section_id = ?', id],
     ['DELETE FROM sections WHERE id = ?', id],
   ]);
+  forgetAuth();
   res.json({ ok: true });
 });
 // approve someone who asked to join (optionally placing them in a different section)
@@ -292,6 +314,7 @@ app.patch('/api/admin/members/:id', ...A, async (req, res) => {
     await db.run('UPDATE users SET permissions = ? WHERE id = ?', JSON.stringify(perms), m.id);
   }
   if (req.body.section_id !== undefined) await db.run('UPDATE users SET section_id = ? WHERE id = ?', await checkSection(req.body.section_id), m.id);
+  forgetAuth();
   res.json({ ok: true });
 });
 app.delete('/api/admin/members/:id', ...A, async (req, res) => {
@@ -300,6 +323,7 @@ app.delete('/api/admin/members/:id', ...A, async (req, res) => {
   if (m.id === req.user.id) return res.status(400).json({ error: "You can't remove yourself" });
   await db.batch(['sessions', 'user_tasks', 'progress', 'reviews', 'study_sessions', 'plan_items']
     .map((t) => [`DELETE FROM ${t} WHERE user_id = ?`, m.id]).concat([['DELETE FROM users WHERE id = ?', m.id]]));
+  forgetAuth();
   res.json({ ok: true });
 });
 
@@ -308,17 +332,19 @@ const withSources = (c) => (c ? { ...c, sources: parseSources(c.sources) } : c);
 app.get('/api/courses', auth, async (req, res) => res.json((await db.all('SELECT * FROM courses ORDER BY name')).map(withSources)));
 
 // every course with how many assignments / quizzes / exams / sheets / questions it holds
-const COUNTS_SQL = (where) => `
-  (SELECT COUNT(*) FROM tasks t WHERE ${where('t')} AND t.type = 'assignment') AS assignments,
-  (SELECT COUNT(*) FROM tasks t WHERE ${where('t')} AND t.type = 'quiz') AS quizzes,
-  (SELECT COUNT(*) FROM tasks t WHERE ${where('t')} AND t.type = 'exam') AS exams,
+const COUNTS_SQL = (where, vis = '1=1') => `
+  (SELECT COUNT(*) FROM tasks t WHERE ${where('t')} AND ${vis} AND t.type = 'assignment') AS assignments,
+  (SELECT COUNT(*) FROM tasks t WHERE ${where('t')} AND ${vis} AND t.type = 'quiz') AS quizzes,
+  (SELECT COUNT(*) FROM tasks t WHERE ${where('t')} AND ${vis} AND t.type = 'exam') AS exams,
   (SELECT COUNT(*) FROM materials m WHERE ${where('m')}) AS sheets,
   (SELECT COUNT(*) FROM questions q WHERE ${where('q')}) AS questions`;
 app.get('/api/courses/overview', auth, async (req, res) => {
-  const courses = await db.all(`SELECT c.*, ${COUNTS_SQL((a) => `${a}.course_id = c.id`)},
+  // only count what this person can see (values are generated here, not user input)
+  const vis = `(t.section_id IS NULL OR t.section_id = ${Number(req.user.section_id) || -1}) AND NOT (t.type IN ('quiz','exam') AND t.due_at IS NOT NULL AND t.due_at < '${nowISO()}')`;
+  const courses = await db.all(`SELECT c.*, ${COUNTS_SQL((a) => `${a}.course_id = c.id`, vis)},
       (SELECT COUNT(*) FROM questions q JOIN progress p ON p.question_id = q.id AND p.user_id = ? WHERE q.course_id = c.id AND p.reps >= 4) AS mastered
     FROM courses c ORDER BY c.name`, req.user.id);
-  const none = await db.get(`SELECT ${COUNTS_SQL((a) => `${a}.course_id IS NULL`)}`);
+  const none = await db.get(`SELECT ${COUNTS_SQL((a) => `${a}.course_id IS NULL`, vis)}`);
   res.json({ courses: courses.map(withSources), uncategorized: none });
 });
 
@@ -329,7 +355,7 @@ app.get('/api/courses/:id/content', auth, async (req, res) => {
   const course = none ? { id: 'none', name: 'No course', color: '#9ca3af' } : await db.get('SELECT * FROM courses WHERE id = ?', cid);
   if (!course) return res.status(404).json({ error: 'Course not found' });
   const match = (a) => (none ? `${a}.course_id IS NULL` : `${a}.course_id = ${cid}`);
-  const tasks = await db.all(taskQuery(match('t')) + ` ORDER BY (COALESCE(ut.status,'todo') = 'done'), COALESCE(td.due_at, t.due_at) IS NULL, COALESCE(td.due_at, t.due_at)`, tp(req));
+  const tasks = await db.all(taskQuery(match('t'), { all: req.user.perms.includes('tasks') }) + ` ORDER BY (COALESCE(ut.status,'todo') = 'done'), COALESCE(td.due_at, t.due_at) IS NULL, COALESCE(td.due_at, t.due_at)`, tp(req));
   if (req.user.perms.includes('tasks') && tasks.length) {
     const dues = await db.all(`SELECT task_id, section_id, due_at FROM task_due WHERE task_id IN (${tasks.map((t) => t.id).join(',')})`);
     for (const t of tasks) t.section_dues = Object.fromEntries(dues.filter((d) => d.task_id === t.id).map((d) => [d.section_id, d.due_at]));
@@ -365,13 +391,14 @@ app.put('/api/courses/:id', ...can('courses'), async (req, res) => {
 app.delete('/api/courses/:id', ...can('courses'), async (req, res) => {
   const id = Number(req.params.id);
   await db.batch(['tasks', 'materials', 'questions', 'study_sessions', 'plan_items']
-    .map((t) => [`UPDATE ${t} SET course_id = NULL WHERE course_id = ?`, id]).concat([['DELETE FROM courses WHERE id = ?', id]]));
+    .map((t) => [`UPDATE ${t} SET course_id = NULL WHERE course_id = ?`, id]).concat([['DELETE FROM timetable WHERE course_id = ?', id], ['DELETE FROM courses WHERE id = ?', id]]));
   res.json({ ok: true });
 });
 
 // ---------- tasks (assignments / quizzes / exams) ----------
 app.get('/api/tasks', auth, async (req, res) => {
-  const rows = await db.all(taskQuery() + ` ORDER BY (COALESCE(ut.status,'todo') = 'done'), COALESCE(td.due_at, t.due_at) IS NULL, COALESCE(td.due_at, t.due_at)`, tp(req));
+  // editors see every section's homework (so they can manage it); everyone else only their own
+  const rows = await db.all(taskQuery('1=1', { all: req.user.perms.includes('tasks') }) + ` ORDER BY (COALESCE(ut.status,'todo') = 'done'), COALESCE(td.due_at, t.due_at) IS NULL, COALESCE(td.due_at, t.due_at)`, tp(req));
   if (req.user.perms.includes('tasks')) {
     const dues = await db.all('SELECT task_id, section_id, due_at FROM task_due');
     for (const t of rows) t.section_dues = Object.fromEntries(dues.filter((d) => d.task_id === t.id).map((d) => [d.section_id, d.due_at]));
@@ -390,26 +417,29 @@ async function requireCourse(courseId) {
 async function taskFields(b, isNew = false) {
   if (!b.title) throw httpError(400, 'Title required');
   if (isNew) await requireCourse(b.course_id);
-  return [b.title, b.type || 'assignment', nul(b.due_at), b.priority || 'medium', b.notes || '', nul(b.max_grade), await checkCourse(b.course_id)];
+  const only = b.section_id ? await checkSection(b.section_id) : null; // homework for one section only
+  return [b.title, b.type || 'assignment', nul(b.due_at), b.priority || 'medium', b.notes || '', nul(b.max_grade), await checkCourse(b.course_id), only];
 }
 app.post('/api/tasks', ...can('tasks'), async (req, res) => {
-  const r = await db.run(`INSERT INTO tasks (title, type, due_at, priority, notes, max_grade, course_id, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, ...(await taskFields(req.body, true)), req.user.id);
+  const fields = await taskFields(req.body, true);
+  const only = fields[7];
+  const r = await db.run(`INSERT INTO tasks (title, type, due_at, priority, notes, max_grade, course_id, section_id, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, ...fields, req.user.id);
   await saveSectionDues(r.lastInsertRowid, req.body.section_dues);
   const course = req.body.course_id ? (await db.get('SELECT name FROM courses WHERE id = ?', Number(req.body.course_id)))?.name : null;
-  await notify({ kind: 'task', title: `New ${req.body.type || 'assignment'}: ${req.body.title}`,
-    body: `${course ? course + ' · ' : ''}added by ${req.user.name}. Check your section's due date.`, url: req.body.course_id ? `#/courses/${req.body.course_id}` : '#/tasks' });
+  await notify({ kind: 'task', audience: only ? 'section' : 'all', targetId: only, title: `New ${req.body.type || 'assignment'}: ${req.body.title}`,
+    body: `${course ? course + ' · ' : ''}added by ${req.user.name}.${only ? ' For your section only.' : " Check your section's due date."}`, url: req.body.course_id ? `#/courses/${req.body.course_id}` : '#/tasks' });
   res.json({ id: r.lastInsertRowid });
 });
 app.put('/api/tasks/:id', ...can('tasks'), async (req, res) => {
-  await db.run('UPDATE tasks SET title=?, type=?, due_at=?, priority=?, notes=?, max_grade=?, course_id=? WHERE id = ?',
+  await db.run('UPDATE tasks SET title=?, type=?, due_at=?, priority=?, notes=?, max_grade=?, course_id=?, section_id=? WHERE id = ?',
     ...(await taskFields(req.body)), req.params.id);
   await saveSectionDues(Number(req.params.id), req.body.section_dues);
   res.json({ ok: true });
 });
 app.delete('/api/tasks/:id', ...can('tasks'), async (req, res) => {
   const id = Number(req.params.id);
-  await db.batch(['task_due', 'user_tasks', 'plan_items'].map((t) => [`DELETE FROM ${t} WHERE task_id = ?`, id]).concat([['DELETE FROM tasks WHERE id = ?', id]]));
+  if (id) await deleteTasks([id]);
   res.json({ ok: true });
 });
 app.patch('/api/tasks/:id/mine', auth, async (req, res) => {
@@ -710,7 +740,7 @@ app.get('/api/dashboard', auth, async (req, res) => {
   const tz = Number(req.query.tz_offset) || 0;
   const open = `COALESCE(ut.status,'todo') != 'done'`, due = 'COALESCE(td.due_at, t.due_at)';
   const [overdue, upcoming, soon, today_plan, rd, nq, mw, aw, st, grades] = await Promise.all([
-    db.all(taskQuery(`${open} AND ${due} < $now`) + ` ORDER BY ${due}`, tp(req, { $now: now })),
+    Promise.resolve([]),
     db.all(taskQuery(`${open} AND ${due} >= $now`) + ` ORDER BY ${due} LIMIT 8`, tp(req, { $now: now })),
     db.all(taskQuery(`${open} AND ${due} BETWEEN $now AND $in3`), tp(req, { $now: now, $in3: in3 })),
     db.all(`SELECT p.*, c.name AS course_name, c.color AS course_color FROM plan_items p LEFT JOIN courses c ON c.id = p.course_id
@@ -731,10 +761,53 @@ app.get('/api/dashboard', auth, async (req, res) => {
 
 app.get('/api/reminders', auth, async (req, res) => {
   const due = 'COALESCE(td.due_at, t.due_at)';
-  const tasks = (await db.all(taskQuery(`COALESCE(ut.status,'todo') != 'done' AND ${due} IS NOT NULL AND ${due} <= $soon`),
+  const tasks = (await db.all(taskQuery(`COALESCE(ut.status,'todo') != 'done' AND ${due} IS NOT NULL AND ${due} >= $now AND ${due} <= $soon`),
     tp(req, { $soon: new Date(Date.now() + 86400000).toISOString() }))).map(({ id, title, type, due_at }) => ({ id, title, type, due_at }));
   const reviews = (await db.get('SELECT COUNT(*) AS n FROM progress WHERE user_id = ? AND due_at <= ?', req.user.id, nowISO())).n;
   res.json({ tasks, reviews_due: reviews });
+});
+
+// ---------- timetable (per section; labs can alternate weekly: week A / week B) ----------
+const TT_KINDS = ['lecture', 'tutorial', 'lab', 'other'];
+function slotFields(b) {
+  const day = Number(b.day);
+  const time = (v) => (/^([01]\d|2[0-3]):[0-5]\d$/.test(String(v || '')) ? String(v) : null);
+  const start = time(b.start), end = time(b.end);
+  if (!(day >= 0 && day <= 6) || !start || !end) throw httpError(400, 'Choose a day, a start time and an end time');
+  if (end <= start) throw httpError(400, 'The end time must be after the start time');
+  return { day, start, end, kind: TT_KINDS.includes(b.kind) ? b.kind : 'lecture', location: String(b.location || '').trim().slice(0, 60), weeks: ['a', 'b'].includes(b.weeks) ? b.weeks : 'all' };
+}
+app.get('/api/timetable', auth, async (req, res) => {
+  res.json({
+    slots: await db.all(`SELECT t.*, c.name AS course_name, c.color AS course_color, c.code AS course_code FROM timetable t
+      LEFT JOIN courses c ON c.id = t.course_id ORDER BY t.day, t.start`),
+    week_a: await getSetting('tt_week_a'), // a date inside a "week A"; weeks alternate A, B, A, B…
+    my_section_id: req.user.section_id,
+  });
+});
+app.post('/api/timetable', ...A, async (req, res) => {
+  const f = slotFields(req.body); const courseId = await checkCourse(req.body.course_id);
+  const secs = [...new Set((Array.isArray(req.body.section_ids) ? req.body.section_ids : [req.body.section_id]).map(Number).filter(Boolean))];
+  if (!secs.length) return res.status(400).json({ error: 'Choose at least one section' });
+  for (const s of secs) await checkSection(s);
+  await db.batch(secs.map((s) => ['INSERT INTO timetable (section_id, day, start, end, course_id, kind, location, weeks) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    s, f.day, f.start, f.end, courseId, f.kind, f.location, f.weeks]));
+  res.json({ added: secs.length });
+});
+app.put('/api/timetable/week', ...A, async (req, res) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(req.body.week_a || ''))) return res.status(400).json({ error: 'Bad date' });
+  await setSetting('tt_week_a', req.body.week_a);
+  res.json({ ok: true });
+});
+app.put('/api/timetable/:id', ...A, async (req, res) => {
+  const f = slotFields(req.body);
+  await db.run('UPDATE timetable SET day=?, start=?, end=?, course_id=?, kind=?, location=?, weeks=? WHERE id = ?',
+    f.day, f.start, f.end, await checkCourse(req.body.course_id), f.kind, f.location, f.weeks, req.params.id);
+  res.json({ ok: true });
+});
+app.delete('/api/timetable/:id', ...A, async (req, res) => {
+  await db.run('DELETE FROM timetable WHERE id = ?', req.params.id);
+  res.json({ ok: true });
 });
 
 // ---------- notifications ----------
@@ -776,7 +849,9 @@ app.get('/api/admin/connections', ...A, async (req, res) => {
     moodle: { connected: !!url, url_hint: url ? url.replace(/(authtoken=)[^&]+/i, '$1•••••').slice(0, 120) : null,
       last_sync: await gs('moodle_last_sync'), last_status: await gs('moodle_last_status') },
     email: { hook_url: `${baseUrl(req)}/api/hooks/email`, secret: await integrations.hookSecret(), share: (await gs('email_share')) === 'all',
-      owner: owner ? (await db.get('SELECT name FROM users WHERE id = ?', owner))?.name : null, last: await gs('email_last') },
+      owner: owner ? (await db.get('SELECT name FROM users WHERE id = ?', owner))?.name : null, last: await gs('email_last'),
+      section_id: Number(await gs('email_section_id')) || null },
+    sections: await db.all('SELECT id, name FROM sections ORDER BY name'),
     cron_url: `${baseUrl(req)}/api/cron`,
   });
 });
@@ -791,6 +866,7 @@ app.put('/api/admin/connections', ...A, async (req, res) => {
   }
   if ('email_share' in b) await ss('email_share', b.email_share ? 'all' : 'owner');
   if (b.claim_email) await ss('email_owner_id', String(req.user.id)); // email alerts go to this admin
+  if ('email_section_id' in b) await ss('email_section_id', b.email_section_id ? String(await checkSection(b.email_section_id)) : '');
   res.json({ ok: true });
 });
 app.post('/api/admin/connections/moodle-sync', ...A, async (req, res) => res.json(await integrations.moodleSync({ force: true })));

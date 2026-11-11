@@ -73,3 +73,12 @@ Generation uses `claude-opus-5-5` by default. You can change it with `CLAUDE_MOD
 | `db.js` | Database layer (libSQL): a local file, or Turso when `TURSO_DATABASE_URL` is set. Uploaded files are stored in it too |
 | `ai.js` | Generates MCQs with Claude from a PDF, image or text |
 | `public/` | Frontend (`index.html`, `app.js`, `styles.css`) in plain JS with no build step |
+
+## Sections, timetable and class emails
+
+- **Section-only homework**: an assignment can be for everyone or for one section only. Each section can also have its own due date.
+- **Past items**: quizzes and exams are deleted once their date has passed. Assignments move to the **Past** tab.
+- **Timetable**: weekly classes per section. Classes that alternate (for example physics lab one week, chemistry lab the next) are marked Week A or Week B. When adding homework, "Fill in" sets each section's date to its next tutorial, lecture or lab.
+- **Add content**: one tab for adding assignments, quizzes, exams and study sheets.
+- **Users** (admins): members and sections, permissions, and connections in one tab.
+- **Class emails**: emails from a lecture, lab or Moodle class go to the whole class. Emails from a tutorial class go in full only to the section the Gmail belongs to; other sections get a short note. Other emails stay private.

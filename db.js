@@ -115,6 +115,11 @@ const EXTRA_TABLES = [
   `CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, user_id INTEGER NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
   `CREATE TABLE IF NOT EXISTS sent_once (key TEXT PRIMARY KEY, at TEXT NOT NULL DEFAULT (datetime('now')))`,
   `CREATE INDEX IF NOT EXISTS idx_notif ON notifications(created_at)`,
+  // weekly timetable per section. day: 0=Sun … 6=Sat; start/end 'HH:MM'; weeks: all | a | b (alternating weeks, e.g. labs)
+  `CREATE TABLE IF NOT EXISTS timetable (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, section_id INTEGER NOT NULL, day INTEGER NOT NULL,
+    start TEXT NOT NULL, end TEXT NOT NULL, course_id INTEGER, kind TEXT NOT NULL DEFAULT 'lecture',
+    location TEXT DEFAULT '', weeks TEXT NOT NULL DEFAULT 'all')`,
   // notifications a person removed from their own list (others still see them)
   `CREATE TABLE IF NOT EXISTS notification_hidden (user_id INTEGER NOT NULL, notification_id INTEGER NOT NULL, PRIMARY KEY (user_id, notification_id))`,
 ];
@@ -195,6 +200,7 @@ const db = {
       const c = (await db.all('PRAGMA table_info(tasks)')).map((x) => x.name);
       if (!c.includes('source')) await db.run("ALTER TABLE tasks ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'");
       if (!c.includes('external_id')) await db.run('ALTER TABLE tasks ADD COLUMN external_id TEXT');
+      if (!c.includes('section_id')) await db.run('ALTER TABLE tasks ADD COLUMN section_id INTEGER'); // NULL = everyone; else only this section
     });
   },
   initProblems,
