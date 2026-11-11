@@ -1189,7 +1189,8 @@ async function connectionsPage() {
       </ol>
       <div class="row" style="margin-bottom:8px"><button class="btn small" id="copy-script">Copy script</button>
         <button class="btn ghost small" id="new-secret" title="Old scripts stop working">Make a new key</button></div>
-      <div class="code-box" id="script-box">${esc(script)}</div>
+      <textarea class="code-box" id="script-box" readonly spellcheck="false" rows="14" style="width:100%;resize:vertical">${esc(script)}</textarea>
+      <div class="small muted" style="margin-top:4px">If Copy doesn't work: click inside the box, press <b>Ctrl+A</b> then <b>Ctrl+C</b>.</div>
       <p class="small muted" style="margin-top:8px">The script contains a private key for your class — don't share it.</p>
     </div>`;
   const run = async (p, msg) => { try { const r = await p; if (msg) toast(typeof msg === 'function' ? msg(r) : msg); } catch (e) { fail(e); } connectionsPage(); };
@@ -1199,7 +1200,16 @@ async function connectionsPage() {
   $('#moodle-sync')?.addEventListener('click', () => run(POST('/api/admin/connections/moodle-sync'), (r) => (r.error ? 'Moodle: ' + r.error : `Synced — ${r.added} new, ${r.updated} updated`)));
   $('#moodle-off')?.addEventListener('click', () => confirm('Disconnect Moodle? Items already imported stay.') && run(PUT('/api/admin/connections', { moodle_ical_url: '' }), 'Moodle disconnected'));
   $('#email-share').onchange = (e) => run(PUT('/api/admin/connections', { email_share: e.target.checked, claim_email: !e.target.checked }), 'Saved');
-  $('#copy-script').onclick = () => run(PUT('/api/admin/connections', { claim_email: true }).then(() => navigator.clipboard.writeText(script)), 'Script copied — paste it into script.google.com');
+  $('#copy-script').onclick = () => {
+    // copy right away (inside the click) — some browsers only allow copying during the click itself
+    const box = $('#script-box');
+    box.focus(); box.select(); box.setSelectionRange(0, box.value.length);
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch {}
+    if (!ok && navigator.clipboard) navigator.clipboard.writeText(script).then(() => toast('Script copied — paste it into script.google.com')).catch(() => toast('Press Ctrl+C now to copy the selected script', true));
+    else if (ok) toast('Script copied — paste it into script.google.com');
+    PUT('/api/admin/connections', { claim_email: true }).catch(() => {}); // email alerts go to you
+  };
   $('#new-secret').onclick = () => confirm('Make a new key? You will need to paste the new script into Google again.') && run(POST('/api/admin/connections/new-secret'), 'New key made — copy the script again');
 }
 
