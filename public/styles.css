@@ -317,3 +317,9 @@ img, iframe { max-width: 100%; }
 .src-chip.section { background: #dcfce7; color: #166534; }
 .src-chip.lab { background: #fae8ff; color: #86198f; }
 .msg-course { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+
+/* delete a notification */
+.notif .n-side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: none; }
+.n-del { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 6px 8px; border-radius: 6px; }
+.n-del:hover { background: var(--red-soft); color: var(--red); }
+@media (hover: hover) { .notif .n-del { opacity: .35; } .notif:hover .n-del { opacity: 1; } }

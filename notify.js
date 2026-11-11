@@ -48,7 +48,8 @@ async function notify({ audience = 'all', targetId = null, kind = 'info', title,
 async function listFor(user, limit = 60) {
   const u = await db.get('SELECT id, role, section_id, notif_seen_at FROM users WHERE id = ?', user.id);
   const rows = await db.all(`SELECT n.* FROM notifications n JOIN (SELECT ? AS id, ? AS role, ? AS section_id) u
-    WHERE ${VISIBLE} ORDER BY n.id DESC LIMIT ?`, u.id, u.role, u.section_id ?? -1, limit);
+    WHERE ${VISIBLE} AND n.id NOT IN (SELECT notification_id FROM notification_hidden WHERE user_id = u.id)
+    ORDER BY n.id DESC LIMIT ?`, u.id, u.role, u.section_id ?? -1, limit);
   const seen = u.notif_seen_at || '';
   for (const n of rows) {
     n.unread = n.created_at > seen;
@@ -57,4 +58,12 @@ async function listFor(user, limit = 60) {
   return { items: rows, unread: rows.filter((n) => n.unread).length };
 }
 
-module.exports = { notify, listFor, vapidKeys, getSetting, setSetting };
+// remove notifications from one person's list (ids = array, or 'all' for everything they can currently see)
+async function hideFor(user, ids) {
+  const list = ids === 'all' ? (await listFor(user, 500)).items.map((n) => n.id) : (Array.isArray(ids) ? ids : [ids]).map(Number).filter(Boolean);
+  if (!list.length) return 0;
+  await db.batch(list.map((id) => ['INSERT OR IGNORE INTO notification_hidden (user_id, notification_id) VALUES (?, ?)', user.id, id]));
+  return list.length;
+}
+
+module.exports = { notify, listFor, hideFor, vapidKeys, getSetting, setSetting };

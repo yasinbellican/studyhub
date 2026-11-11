@@ -115,6 +115,8 @@ const EXTRA_TABLES = [
   `CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, user_id INTEGER NOT NULL, p256dh TEXT NOT NULL, auth TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
   `CREATE TABLE IF NOT EXISTS sent_once (key TEXT PRIMARY KEY, at TEXT NOT NULL DEFAULT (datetime('now')))`,
   `CREATE INDEX IF NOT EXISTS idx_notif ON notifications(created_at)`,
+  // notifications a person removed from their own list (others still see them)
+  `CREATE TABLE IF NOT EXISTS notification_hidden (user_id INTEGER NOT NULL, notification_id INTEGER NOT NULL, PRIMARY KEY (user_id, notification_id))`,
 ];
 const initProblems = []; // shown on /healthz/diag
 

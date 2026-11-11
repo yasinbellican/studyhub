@@ -1040,7 +1040,8 @@ async function notificationsPage() {
   view.innerHTML = `
     <div class="page-head"><div><h1>Notifications</h1><div class="muted">New assignments, deadlines, Moodle updates and emails.</div></div>
       <div class="row">${state === 'on' ? `<button class="btn ghost small" id="push-test">Send a test</button><button class="btn ghost small" id="push-off">Turn off on this device</button>`
-        : state === 'off' ? `<button class="btn" id="push-on">${icon('bell')}Turn on notifications</button>` : ''}</div></div>
+        : state === 'off' ? `<button class="btn" id="push-on">${icon('bell')}Turn on notifications</button>` : ''}
+        ${items.length ? '<button class="btn ghost small" id="notif-clear">Clear all</button>' : ''}</div></div>
     ${state === 'off' ? '<div class="banner">Turn on notifications to get alerts on this phone or computer even when E-JUST is closed.</div>' : ''}
     ${state === 'blocked' ? '<div class="banner red">Notifications are blocked for this site in your browser settings. Allow them for this site, then reload.</div>' : ''}
     ${state === 'ios' ? '<div class="banner">On iPhone/iPad, first install E-JUST (Share → Add to Home Screen) and open it from the home screen — then you can turn on notifications here.</div>' : ''}
@@ -1056,9 +1057,21 @@ async function notificationsPage() {
             ${d.due ? `<div class="n-due">${icon('clock')}Due ${esc(d.due)}</div>` : ''}
             ${d.todo?.length ? `<ul class="n-todo">${d.todo.slice(0, 3).map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : n.body ? `<div class="n-text">${esc(n.body)}</div>` : ''}`
             : n.body ? `<div class="n-text">${esc(n.body)}</div>` : ''}</span>
-        <span class="n-time">${timeAgo(n.created_at)}</span></a>`; }).join('')
+        <span class="n-side"><span class="n-time">${timeAgo(n.created_at)}</span>
+          <button class="n-del" data-del-notif="${n.id}" title="Delete" aria-label="Delete notification">✕</button></span></a>`; }).join('')
       : '<div class="card empty">No notifications yet.</div>'}</div>`;
-  $$('[data-detail]').forEach((a) => (a.onclick = (e) => { e.preventDefault(); showMessage(items.find((n) => n.id == a.dataset.detail)); }));
+  $$('[data-detail]').forEach((a) => (a.onclick = (e) => { if (e.target.closest('[data-del-notif]')) return; e.preventDefault(); showMessage(items.find((n) => n.id == a.dataset.detail)); }));
+  // delete one (only from my list) — removed from the page straight away
+  $$('[data-del-notif]').forEach((b) => (b.onclick = async (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const row = b.closest('.notif'); row.style.opacity = '.4';
+    try { await DEL(`/api/notifications/${b.dataset.delNotif}`); row.remove(); if (!$('.notif')) notificationsPage(); }
+    catch (err) { row.style.opacity = ''; fail(err); }
+  }));
+  $('#notif-clear')?.addEventListener('click', async () => {
+    if (!confirm(`Delete all ${items.length} notifications from your list? (Classmates keep theirs.)`)) return;
+    try { await DEL('/api/notifications/all'); toast('Notifications cleared'); notificationsPage(); } catch (err) { fail(err); }
+  });
   await POST('/api/notifications/seen').catch(() => {});
   $$('.bell-count').forEach((b) => b.classList.add('hidden'));
   $('#push-on')?.addEventListener('click', async () => { await enablePush(); notificationsPage(); });

@@ -739,6 +739,11 @@ app.get('/api/reminders', auth, async (req, res) => {
 
 // ---------- notifications ----------
 app.get('/api/notifications', auth, async (req, res) => res.json(await listFor(req.user)));
+// remove from MY list only — classmates keep seeing it
+app.delete('/api/notifications/:id', auth, async (req, res) => {
+  const n = req.params.id === 'all' ? await N().hideFor(req.user, 'all') : await N().hideFor(req.user, [req.params.id]);
+  res.json({ removed: n });
+});
 app.post('/api/notifications/seen', auth, async (req, res) => {
   await db.run("UPDATE users SET notif_seen_at = datetime('now') WHERE id = ?", req.user.id);
   res.json({ ok: true });
