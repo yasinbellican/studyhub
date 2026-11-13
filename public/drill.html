@@ -68,7 +68,7 @@ h1,h2,h3{font-family:var(--font-display);margin:0;text-wrap:balance;line-height:
 .block h2{font-size:20px;font-weight:600;display:flex;gap:10px;align-items:center}
 .step{flex:none;width:26px;height:26px;border-radius:50%;border:2px solid var(--ink);display:grid;place-items:center;font-size:14px;font-family:var(--font-mono);font-weight:600}
 .hint{margin:0;color:var(--muted);font-size:15px}
-.block[hidden]{display:none}
+.block[hidden],.btn[hidden],.hint[hidden]{display:none}
 .sets .none{color:var(--muted);font-size:15px;padding:4px 2px}
 .setbtn:disabled,.btn:disabled{opacity:.6;cursor:progress}
 
@@ -217,7 +217,10 @@ textarea{resize:vertical;font-family:var(--font-mono);font-size:13.5px;line-heig
       <p class="lede">Answer every question. The ones you miss come back next round until none are left.</p>
     </header>
 
-    <div class="block">
+    <button class="btn primary wide" id="addbtn" type="button" hidden>Add MCQ drill</button>
+    <p class="hint" id="empty" hidden></p>
+
+    <div class="block" id="blk-sets" hidden>
       <h2>Your sets</h2>
       <ul class="sets" id="sets"></ul>
       <fieldset class="order">
@@ -226,8 +229,17 @@ textarea{resize:vertical;font-family:var(--font-mono);font-size:13.5px;line-heig
         <label><input type="radio" name="order" id="ord-rand" value="random"><span>Random</span></label>
       </fieldset>
     </div>
+  </section>
 
-    <div class="block" id="blk-ask" hidden>
+  <!-- ADD (opened with the "Add MCQ drill" button, only for members allowed to upload) -->
+  <section class="screen" id="add">
+    <div class="topbar">
+      <span class="round">Add MCQ drill</span>
+      <button class="quit" id="addback" type="button">Back to sets</button>
+    </div>
+    <p class="lede" style="margin-top:-8px">Make the questions with any AI, then add them here. Everyone in your class will see the set.</p>
+
+    <div class="block">
       <h2><span class="step">1</span>Ask any AI for questions</h2>
       <div class="row">
         <div class="field"><label for="topic">Topic</label><input type="text" id="topic" placeholder="e.g. Lecture 4, Kirchhoff's laws"></div>
@@ -237,9 +249,8 @@ textarea{resize:vertical;font-family:var(--font-mono);font-size:13.5px;line-heig
       <button class="btn wide" id="copy" type="button">Copy prompt</button>
     </div>
 
-    <div class="block" id="blk-add" hidden>
+    <div class="block">
       <h2><span class="step">2</span>Add the questions here</h2>
-      <p class="hint">Sets you save here are shared with your whole class.</p>
       <div class="row">
         <label class="filebtn" for="file">Upload a .txt file<input type="file" id="file" accept=".txt,.md,.json,text/plain,application/json"></label>
       </div>
@@ -393,7 +404,7 @@ function parseAny(raw){
 
 function $(id){ return document.getElementById(id); }
 function shuffle(a){ a = a.slice(); for(var i=a.length-1;i>0;i--){ var j=Math.floor(Math.random()*(i+1)); var t=a[i]; a[i]=a[j]; a[j]=t; } return a; }
-function show(id){ ['home','quiz','summary','done'].forEach(function(s){ $(s).classList.toggle('on', s===id); }); window.scrollTo(0,0); }
+function show(id){ ['home','add','quiz','summary','done'].forEach(function(s){ $(s).classList.toggle('on', s===id); }); window.scrollTo(0,0); }
 var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 /* ---------- class sets (kept on the E-JUST server, shared with the whole class) ---------- */
@@ -410,8 +421,9 @@ function api(method, url, body){
       });
     });
 }
-function showAdd(){ $('blk-ask').hidden = !CAN; $('blk-add').hidden = !CAN; }
-function note(text){ var li = document.createElement('li'); li.className = 'none'; li.textContent = text; return li; }
+/* the "Add MCQ drill" button is only for members allowed to upload; it opens the add screen */
+function showAdd(){ $('addbtn').hidden = !CAN; if(!CAN && $('add').classList.contains('on')) show('home'); }
+function emptyNote(text){ $('empty').textContent = text || ''; $('empty').hidden = !text; }
 function refresh(){
   return api('GET', '/api/drill-sets').then(function(list){
     SETS = Array.isArray(list) ? list : []; loaded = true; loadErr = false; renderSets();
@@ -434,9 +446,11 @@ function openSet(set, b){
 
 function renderSets(){
   var ul = $('sets'); ul.textContent = '';
-  if(!loaded){ ul.appendChild(note('Loading...')); return; }
-  if(loadErr){ ul.appendChild(note('Could not load the sets. Check your connection and open this page again.')); return; }
-  if(!SETS.length){ ul.appendChild(note(CAN ? 'No sets yet. Add the first one below.' : 'No sets yet. They show up here as soon as your class adds them.')); return; }
+  $('blk-sets').hidden = !SETS.length;
+  if(!loaded){ emptyNote(''); return; }
+  if(loadErr){ emptyNote('Could not load the MCQ drills. Check your connection and open this page again.'); return; }
+  if(!SETS.length){ emptyNote('No MCQ drills yet.'); return; }
+  emptyNote('');
   SETS.forEach(function(set){
     var li = document.createElement('li');
     var b = document.createElement('button'); b.type = 'button'; b.className = 'setbtn';
@@ -724,6 +738,8 @@ function tick(){
   if(parts.length) raf = requestAnimationFrame(tick); else { raf = null; ctx.clearRect(0,0,innerWidth,innerHeight); }
 }
 
+$('addbtn').addEventListener('click', function(){ if(CAN) show('add'); });
+$('addback').addEventListener('click', function(){ show('home'); });
 showAdd(); renderSets(); buildPrompt(); setOrder(ORDER);
 refresh();
 api('GET', '/api/me').then(function(me){
