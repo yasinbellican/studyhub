@@ -299,9 +299,9 @@ async function sectionDialog() {
 }
 
 // ---------- router ----------
-const routes = { dashboard, tasks, timetable: timetablePage, materials, practice, questions, planner, focus, courses, add: addPage, users: usersPage, notifications: notificationsPage };
+const routes = { dashboard, tasks, timetable: timetablePage, materials, practice, planner, focus, courses, add: addPage, users: usersPage, notifications: notificationsPage };
 const adminRoutes = ['users'];
-const OLD_ROUTES = { class: 'users', permissions: 'users/permissions', connections: 'users/connections' }; // links from before the Users tab
+const OLD_ROUTES = { questions: 'practice', class: 'users', permissions: 'users/permissions', connections: 'users/connections' }; // links from before the Users tab
 const LIVE_PAGES = new Set(['practice', 'focus', 'add']); // pages holding your work in progress: never redrawn behind your back
 let routeSeq = 0, needsReload = false, lastRoute = '', activePage = '';
 // true when the user has moved to another page: a late refresh must not draw over it
@@ -315,7 +315,6 @@ async function route() {
   if (OLD_ROUTES[path.split('/')[0]]) path = OLD_ROUTES[path.split('/')[0]];
   let [name, ...args] = path.split('/');
   if (adminRoutes.includes(name) && !isAdmin()) name = 'dashboard';
-  if (name === 'questions' && !can('questions')) name = 'dashboard';
   if (name === 'add' && !can('tasks') && !can('sheets')) name = 'dashboard';
   const fn = routes[name] || dashboard;
   const active = routes[name] ? name : 'dashboard';
@@ -332,6 +331,7 @@ async function route() {
   try { await fn(...args); }
   catch (e) { ok = false; if (e.message !== 'Not signed in' && seq === routeSeq) view.innerHTML = `<div class="banner red">${esc(e.message)}</div>`; }
   finally { if (cacheMode === mode) cacheMode = null; clearTimeout(slow); $('#progress').classList.remove('on'); }
+  view.classList.toggle('bare', !!$('#drill-frame')); // the practice page fills the whole area; every other page gets its margins back
   if (seq !== routeSeq) return;
   if (isNav) { window.scrollTo(0, 0); view.classList.remove('enter'); void view.offsetWidth; view.classList.add('enter'); }
   // it was drawn from saved data: fetch fresh copies and redraw only if something actually changed
@@ -379,8 +379,8 @@ async function dashboard() {
     ${d.due_soon_count ? `<div class="banner"><b>${d.due_soon_count}</b> item${d.due_soon_count > 1 ? 's are' : ' is'} due in the next 3 days.</div>` : ''}
     <div class="stats">
       <div class="stat"><div class="num">${d.streak}</div><div class="lbl">day study streak</div></div>
-      <div class="stat ${d.reviews_due ? 'alert' : ''}"><div class="num">${d.reviews_due}</div><div class="lbl">MCQs due for review</div></div>
-      <div class="stat"><div class="num">${d.new_questions}</div><div class="lbl">new questions waiting</div></div>
+      <a class="stat" href="#/practice" style="text-decoration:none;color:inherit"><div class="num">${d.question_sets ?? 0}</div><div class="lbl">MCQ set${d.question_sets === 1 ? '' : 's'} to practise</div></a>
+      <div class="stat"><div class="num">${d.practised_week ?? 0}</div><div class="lbl">questions practised this week</div></div>
       <div class="stat"><div class="num">${Math.round(d.minutes_week / 6) / 10}h</div><div class="lbl">focused study this week</div></div>
     </div>
     <div class="grid g2">
@@ -620,19 +620,18 @@ async function materials(id) {
   const list = await GET('/api/materials');
   if (away('materials')) return;
   view.innerHTML = `
-    <div class="page-head"><div><h1>Study Sheets</h1><div class="muted">The class's shared sheets — read them, then practise their MCQs until you master them.</div></div>
+    <div class="page-head"><div><h1>Study Sheets</h1><div class="muted">The class's shared sheets, by course.</div></div>
       ${can('sheets') ? `<a class="btn" href="#/add?type=sheet">${icon('plus')}Add sheet</a>` : ''}</div>
     <div class="grid g3">${list.length ? list.map((m) => `<div class="card">
       <div class="row spread"><span class="badge gray">${m.kind.toUpperCase()}</span>${courseTag(m.course_name, m.course_color)}</div>
       <h3 style="margin-top:10px">${esc(m.title)}</h3>
-      <div class="small muted">${m.question_count} questions · added ${new Date(m.created_at.replace(' ', 'T') + 'Z').toLocaleDateString()}</div>
+      <div class="small muted">Added ${new Date(m.created_at.replace(' ', 'T') + 'Z').toLocaleDateString()}</div>
       <div class="row" style="margin-top:12px"><a class="btn small" href="#/materials/${m.id}">Open</a>
-        ${m.question_count ? `<a class="btn soft small" href="#/practice?material_id=${m.id}">Practice</a>` : ''}
         ${can('sheets') ? `<button class="btn danger small" data-del="${m.id}">✕</button>` : ''}</div>
-      ${m.question_count ? `<div class="small muted" style="margin-top:10px">You've mastered ${m.mastered}/${m.question_count}</div>${bar((m.mastered / m.question_count) * 100, 'green')}` : ''}</div>`).join('')
+      </div>`).join('')
       : `<div class="card empty" style="grid-column:1/-1">No study sheets yet.${can('sheets') ? ' Use “Add sheet” to upload the first one for the class.' : ' Your class reps will add them here.'}</div>`}</div>`;
   $$('[data-del]').forEach((b) => (b.onclick = async () => {
-    if (confirm('Delete this sheet and all questions generated from it?')) { await DEL(`/api/materials/${b.dataset.del}`); materials(); }
+    if (confirm('Delete this sheet?')) { await DEL(`/api/materials/${b.dataset.del}`); materials(); }
   }));
 }
 
@@ -663,185 +662,36 @@ async function materialReader(id) {
   const m = await GET(`/api/materials/${id}`);
   const content = m.kind === 'pdf' ? `<iframe src="/api/materials/${m.id}/file"></iframe>`
     : m.kind === 'image' ? `<img src="/api/materials/${m.id}/file" alt="">` : `<div class="text">${esc(m.body)}</div>`;
-  const total = m.question_count, mastered = m.mastered;
   if (away('materials')) return;
   view.innerHTML = `
-    <div class="page-head"><div><a href="#/materials" class="small">← All sheets</a><h1>${esc(m.title)}</h1></div></div>
-    <div class="split">
-      <div class="reader card">${content}</div>
-      <div class="grid">
-        <div class="card"><h3>Master this sheet</h3>
-          <div class="small muted">${total} questions · you've mastered ${mastered}</div>${bar(total ? (mastered / total) * 100 : 0, 'green')}
-          <div class="row" style="margin-top:12px">${total ? `<a class="btn" href="#/practice?material_id=${m.id}">Practice now</a>` : '<span class="small muted">No questions for this sheet yet.</span>'}
-            ${can('questions') ? `<a class="btn ghost small" href="#/questions?material_id=${m.id}">Edit questions</a>` : ''}</div></div>
-        ${can('questions') ? `<div class="card"><h3>Generate MCQs with AI</h3>
-          ${ME.ai ? '' : '<div class="banner small">AI is not set up yet. Add <code>ANTHROPIC_API_KEY</code> to the <code>.env</code> file and restart the server.</div>'}
-          <div class="form">
-            <div class="two"><div><label>How many</label><input type="number" id="g-count" value="10" min="1" max="30"></div>
-              <div><label>Difficulty</label><select id="g-diff"><option>mixed</option><option>easy</option><option>medium</option><option>hard</option></select></div></div>
-            <div><label>Focus on (optional)</label><input id="g-focus" placeholder="e.g. formulas, definitions, chapter 2"></div>
-            <button class="btn" id="gen" ${ME.ai ? '' : 'disabled'}>Generate questions</button>
-            <div class="small muted">New questions avoid repeating the ones you already have.</div>
-          </div></div>
-        <div class="card"><h3>Add your own</h3><button class="btn soft small" id="manual">+ Write a question</button></div>` : ''}
-      </div></div>`;
-  if (!can('questions')) return;
-  $('#manual').onclick = () => questionForm({ material_id: m.id, course_id: m.course_id }, () => materialReader(id));
-  $('#gen').onclick = async (e) => {
-    const btn = e.target; btn.disabled = true; btn.textContent = 'Generating… (can take up to a minute)';
-    try {
-      const r = await POST(`/api/materials/${m.id}/generate`, { count: $('#g-count').value, difficulty: $('#g-diff').value, focus: $('#g-focus').value });
-      toast(`Added ${r.added} questions`); materialReader(id);
-    } catch (err) { fail(err); btn.disabled = false; btn.textContent = 'Generate questions'; }
-  };
+    <div class="page-head"><div><a href="#/materials" class="small">← All sheets</a><h1>${esc(m.title)}</h1></div>
+      <a class="btn soft" href="#/practice">${icon('target')}Practice MCQs</a></div>
+    <div class="reader card">${content}</div>`;
 }
 
 // =====================================================================
-// PRACTICE — spaced-repetition MCQs
+// PRACTICE — MCQ Drill: the class's shared question sets. The page itself is public/drill.html,
+// shown inside a frame so it looks and behaves exactly like the stand-alone file.
 // =====================================================================
 function hashParams() { return new URLSearchParams(location.hash.split('?')[1] || ''); }
-let session = { answered: 0, correct: 0, seen: [] };
+window.drillCan = () => can('questions'); // the drill page asks this to know whether to show the upload part
+let drillPage = null; // the drill page's HTML, fetched once
+function loadDrill() {
+  if (!drillPage) {
+    drillPage = fetch('/drill.html').then((r) => (r.ok ? r.text() : Promise.reject(new Error('Could not open the practice page. Check your connection.'))));
+    drillPage.catch(() => { drillPage = null; });
+  }
+  return drillPage;
+}
+window.addEventListener('load', () => setTimeout(() => loadDrill().catch(() => {}), 2000)); // ready before you tap it
 
 async function practice() {
-  const p = hashParams();
-  const [mats, topics] = await Promise.all([GET('/api/materials'), GET('/api/topics' + (p.get('course_id') ? `?course_id=${p.get('course_id')}` : ''))]);
-  session = { answered: 0, correct: 0, seen: [] };
-  const mode = p.get('mode') || 'scheduled';
+  if ($('#drill-frame')) return; // already open: keep the quiz in progress
+  const html = await loadDrill();
   if (away('practice')) return;
-  view.innerHTML = `<div class="practice">
-    <div class="page-head"><div><h1>Practice MCQs</h1><div class="muted">Wrong answers come back in a few minutes; correct ones come back later and later until you master them.</div></div></div>
-    <div class="filters">
-      <select id="p-course">${courseOpts(p.get('course_id') || '', 'All courses')}</select>
-      <select id="p-mat"><option value="">All sheets</option>${mats.filter((m) => !p.get('course_id') || String(m.course_id) === p.get('course_id')).map((m) => `<option value="${m.id}" ${p.get('material_id') == m.id ? 'selected' : ''}>${esc(m.title)}</option>`).join('')}</select>
-      <select id="p-topic"><option value="">All topics</option>${topics.map((t) => `<option ${p.get('topic') === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>
-      <select id="p-mode"><option value="scheduled" ${mode === 'scheduled' ? 'selected' : ''}>Smart (due + new)</option><option value="cram" ${mode === 'cram' ? 'selected' : ''}>Keep going (cram)</option></select>
-    </div>
-    <div id="p-progress" class="card" style="margin-bottom:14px"></div>
-    <div id="p-area"></div></div>`;
-  const setParam = (k, v) => { const q = hashParams(); v ? q.set(k, v) : q.delete(k); if (k === 'course_id') { q.delete('material_id'); q.delete('topic'); } location.hash = '#/practice?' + q; };
-  $('#p-course').onchange = (e) => setParam('course_id', e.target.value);
-  $('#p-mat').onchange = (e) => setParam('material_id', e.target.value);
-  $('#p-topic').onchange = (e) => setParam('topic', e.target.value);
-  $('#p-mode').onchange = (e) => setParam('mode', e.target.value);
-  nextQuestion();
-}
-
-let keyHandler = null;
-function setKeys(fn) { if (keyHandler) document.removeEventListener('keydown', keyHandler); keyHandler = fn; if (fn) document.addEventListener('keydown', fn); }
-window.addEventListener('hashchange', () => setKeys(null));
-
-async function nextQuestion() {
-  const p = hashParams(); const q = new URLSearchParams();
-  for (const k of ['course_id', 'material_id', 'topic', 'mode']) if (p.get(k)) q.set(k, p.get(k));
-  if (p.get('mode') === 'cram') q.set('exclude', session.seen.slice(-Math.max(1, Math.min(5, session.seen.length))).join(','));
-  const r = await GET('/api/practice/next?' + q);
-  if (away('practice') || !$('#p-area')) return;
-  const c = r.counts; const pctM = c.total ? Math.round((c.mastered / c.total) * 100) : 0;
-  $('#p-progress').innerHTML = `<div class="row spread small"><span><b>${c.mastered}</b>/${c.total} mastered · <b>${c.due || 0}</b> due · <b>${c.fresh || 0}</b> new</span>
-    <span>This session: <b>${session.correct}</b>/${session.answered} correct</span></div>${bar(pctM, 'green')}`;
-  const area = $('#p-area');
-  if (!r.question) {
-    setKeys(null);
-    if (!c.total) {
-      area.innerHTML = `<div class="card empty">No questions here yet.${can('questions') ? '<br><br><a class="btn" href="#/materials">Upload a sheet & generate MCQs</a> <a class="btn ghost" href="#/questions">Write questions</a>' : '<br>Your class reps will add questions for this.'}</div>`;
-    } else {
-      area.innerHTML = `<div class="card empty"><h2>🎉 All caught up!</h2>
-        <p>You've answered everything that's due.${r.next_due ? ` Next review: <b>${new Date(r.next_due).toLocaleString()}</b>.` : ''}</p>
-        <button class="btn" id="cram">Keep practising anyway</button></div>`;
-      $('#cram').onclick = () => { const q = hashParams(); q.set('mode', 'cram'); location.hash = '#/practice?' + q; };
-    }
-    return;
-  }
-  const Q = r.question; const letters = 'ABCDEFGH';
-  area.innerHTML = `<div class="card qcard">
-    <div class="row spread small"><span class="badge">${esc(Q.topic)}</span><span class="muted">${Q.due_at ? (Q.reps ? `streak ${Q.reps}` : 'review') : 'new'} · ${Q.source === 'ai' ? 'AI' : 'manual'}</span></div>
-    <div class="qtext">${esc(Q.question)}</div>
-    <div id="choices">${Q.choices.map((ch, i) => `<button class="choice" data-i="${i}"><span class="key">${letters[i]}</span><span>${esc(ch)}</span></button>`).join('')}</div>
-    <div id="after"></div>
-    <div class="small muted kbd-tip" style="margin-top:10px">Tip: press 1–${Q.choices.length} to answer, Enter for next.</div></div>`;
-  let answered = false;
-  const answer = async (i) => {
-    if (answered) return; answered = true;
-    const res = await POST(`/api/questions/${Q.id}/answer`, { choice: i }).catch((e) => { fail(e); answered = false; });
-    if (!res) return;
-    session.answered++; if (res.correct) session.correct++; session.seen.push(Q.id);
-    $$('.choice').forEach((b) => { b.disabled = true; const bi = +b.dataset.i; if (bi === res.answer_index) b.classList.add('right'); else if (bi === i) b.classList.add('wrong'); });
-    $('#after').innerHTML = `<div class="explain"><div class="feedback ${res.correct ? 'ok' : 'no'}">${res.correct ? (res.mastered ? '✅ Correct — mastered! 🏆' : '✅ Correct!') : '❌ Not quite'}</div>
-      ${res.explanation ? `<div style="margin-top:6px">${esc(res.explanation)}</div>` : ''}
-      <div class="small muted" style="margin-top:6px">${res.correct ? `You'll see this again in ${res.interval_days} day${res.interval_days == 1 ? '' : 's'}.` : 'This one will come back in a few minutes.'}</div></div>
-      <div class="row" style="margin-top:14px;justify-content:flex-end"><button class="btn big" id="next">Next →</button></div>`;
-    $('#next').onclick = nextQuestion; $('#next').focus();
-  };
-  $$('.choice').forEach((b) => (b.onclick = () => answer(+b.dataset.i)));
-  setKeys((e) => {
-    if (!$('#modal').classList.contains('hidden') || /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) return;
-    const n = parseInt(e.key);
-    if (!answered && n >= 1 && n <= Q.choices.length) answer(n - 1);
-    else if (answered && e.key === 'Enter' && document.activeElement.id !== 'next') nextQuestion();
-  });
-}
-
-// =====================================================================
-// QUESTION BANK
-// =====================================================================
-async function questions() {
-  const p = hashParams();
-  const q = new URLSearchParams(); if (p.get('course_id')) q.set('course_id', p.get('course_id')); if (p.get('material_id')) q.set('material_id', p.get('material_id'));
-  const [list, mats] = await Promise.all([GET('/api/questions?' + q), GET('/api/materials')]);
-  const status = (x) => (x.reps >= 4 ? '<span class="badge green">mastered</span>' : x.due_at ? `<span class="badge">learning · ${x.reps}/4</span>` : '<span class="badge gray">new</span>');
-  if (away('questions')) return;
-  view.innerHTML = `
-    <div class="page-head"><div><h1>Question Bank</h1><div class="muted">${list.length} questions. Write your own or edit AI-generated ones.</div></div>
-      <button class="btn" id="add">+ New question</button></div>
-    <div class="filters">
-      <select id="q-course">${courseOpts(p.get('course_id') || '', 'All courses')}</select>
-      <select id="q-mat"><option value="">All sheets</option>${mats.map((m) => `<option value="${m.id}" ${p.get('material_id') == m.id ? 'selected' : ''}>${esc(m.title)}</option>`).join('')}</select>
-      <input id="q-search" placeholder="Search…">
-    </div>
-    <div class="list" id="q-list">${list.length ? list.map((x) => `<div class="item" data-text="${esc((x.question + ' ' + x.topic).toLowerCase())}">
-      <div class="grow"><div class="title">${esc(x.question)}</div>
-        <div class="row small muted"><span class="badge gray">${esc(x.topic)}</span> ${status(x)} <span>✓ ${x.correct_count} · ✗ ${x.wrong_count}</span>
-        ${x.material_title ? `<span>${esc(x.material_title)}</span>` : ''} ${x.source === 'ai' ? '<span>AI</span>' : ''}</div>
-        <div class="small" style="margin-top:4px">Answer: <b>${esc(x.choices[x.answer_index])}</b></div></div>
-      <button class="btn ghost small" data-edit="${x.id}">Edit</button>
-      <button class="btn danger small" data-del="${x.id}">✕</button></div>`).join('') : '<div class="empty">No questions yet.</div>'}</div>`;
-  const setP = (k, v) => { const n = hashParams(); v ? n.set(k, v) : n.delete(k); location.hash = '#/questions?' + n; };
-  $('#q-course').onchange = (e) => setP('course_id', e.target.value);
-  $('#q-mat').onchange = (e) => setP('material_id', e.target.value);
-  $('#q-search').oninput = (e) => { const s = e.target.value.toLowerCase(); $$('#q-list .item').forEach((it) => it.classList.toggle('hidden', !it.dataset.text.includes(s))); };
-  $('#add').onclick = () => questionForm({ material_id: p.get('material_id'), course_id: p.get('course_id') }, questions);
-  $$('[data-edit]').forEach((b) => (b.onclick = () => questionForm(list.find((x) => x.id == b.dataset.edit), questions)));
-  $$('[data-del]').forEach((b) => (b.onclick = async () => { if (confirm('Delete this question?')) { await DEL(`/api/questions/${b.dataset.del}`); questions(); } }));
-}
-
-function questionForm(q = {}, after) {
-  const choices = q.choices?.length ? [...q.choices] : ['', '', '', ''];
-  while (choices.length < 4) choices.push('');
-  const ai = q.answer_index ?? 0;
-  openModal(`<h2>${q.id ? 'Edit' : 'New'} question</h2>
-    <form class="form" id="qf">
-      <div><label>Question</label><textarea name="question" required rows="3">${esc(q.question)}</textarea></div>
-      <div class="two"><div><label>Topic</label><input name="topic" value="${esc(q.topic || '')}" placeholder="e.g. Chapter 2 – Mitosis"></div>
-        <div><label>Course</label><select name="course_id">${courseOpts(q.course_id)}</select></div></div>
-      <div><label>Choices — select the correct one</label>
-        ${choices.map((c, i) => `<div class="row" style="margin-bottom:6px;flex-wrap:nowrap"><input type="radio" class="check" name="answer_index" value="${i}" ${i === ai ? 'checked' : ''}>
-          <input name="choice" value="${esc(c)}" placeholder="Choice ${'ABCD'[i] || i + 1}${i < 2 ? '' : ' (optional)'}"></div>`).join('')}</div>
-      <div><label>Explanation (shown after answering)</label><textarea name="explanation" rows="2">${esc(q.explanation)}</textarea></div>
-      <div class="row" style="justify-content:flex-end"><button type="button" class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn">Save</button></div>
-    </form>`, (m) => {
-    $('#qf', m).onsubmit = async (e) => {
-      e.preventDefault();
-      const fd = new FormData(e.target);
-      const raw = fd.getAll('choice'); const sel = +fd.get('answer_index');
-      if (!raw[sel]?.trim()) return toast('The correct choice cannot be empty', true);
-      // drop empty choices while keeping the correct index aligned
-      const kept = raw.map((c, i) => ({ c: c.trim(), i })).filter((x) => x.c);
-      const body = { question: fd.get('question'), topic: fd.get('topic'), course_id: fd.get('course_id'), explanation: fd.get('explanation'),
-        choices: kept.map((x) => x.c), answer_index: kept.findIndex((x) => x.i === sel), material_id: q.material_id || null };
-      try { q.id ? await PUT(`/api/questions/${q.id}`, body) : await POST('/api/questions', body); closeModal(); toast('Saved'); after && after(); }
-      catch (err) { fail(err); }
-    };
-  });
+  view.classList.add('bare');
+  view.innerHTML = '<iframe id="drill-frame" class="drill-frame" title="MCQ Drill"></iframe>';
+  $('#drill-frame').srcdoc = html;
 }
 
 // =====================================================================
@@ -1010,7 +860,6 @@ async function courses(id) {
         <span class="chip">${c.exams} exam${c.exams === 1 ? '' : 's'}</span>
         <span class="chip">${c.sheets} sheet${c.sheets === 1 ? '' : 's'}</span>
       </div>
-      ${c.questions ? `<div class="small muted" style="margin-top:8px">${c.mastered}/${c.questions} MCQs mastered</div>${bar((c.mastered / c.questions) * 100, 'green')}` : ''}
     </a>`).join('')
       || `<div class="card empty" style="grid-column:1/-1">${can('courses') ? 'Add the first course above.' : 'No courses yet.'}</div>`}
     ${hasLoose ? `<a class="card course-card" href="#/courses/none" style="border-top:4px solid #9ca3af">
@@ -1036,18 +885,17 @@ async function courseDetail(id) {
   const sheetCard = (m) => `<div class="item">
     <span class="badge gray">${m.kind.toUpperCase()}</span>
     <div class="grow"><div class="title">${esc(m.title)}</div>
-      <div class="small muted">${m.question_count} MCQs${m.question_count ? ` · you've mastered ${m.mastered}` : ''} · added ${new Date(m.created_at.replace(' ', 'T') + 'Z').toLocaleDateString()}</div></div>
+      <div class="small muted">Added ${new Date(m.created_at.replace(' ', 'T') + 'Z').toLocaleDateString()}</div></div>
     <a class="btn small" href="#/materials/${m.id}">Open</a>
-    ${m.question_count ? `<a class="btn soft small" href="#/practice?material_id=${m.id}">Practice</a>` : ''}
     ${can('sheets') ? `<button class="btn ghost small" data-move-sheet="${m.id}" title="Move to another course">Move</button><button class="btn danger small" data-del-sheet="${m.id}">✕</button>` : ''}</div>`;
 
   if (away('courses')) return;
   view.innerHTML = `
     <div class="page-head"><div><a href="#/courses" class="small">← All courses</a>
       <h1 class="row" style="gap:10px"><span class="dot" style="background:${esc(c.color)};width:16px;height:16px"></span>${esc(c.name)}${c.code ? ` <span class="code-chip">${esc(c.code)}</span>` : ''}</h1>
-      <div class="muted small">${d.tasks.length} item${d.tasks.length === 1 ? '' : 's'} · ${d.materials.length} study sheet${d.materials.length === 1 ? '' : 's'}${d.questions.total ? ` · ${d.questions.mastered}/${d.questions.total} MCQs mastered` : ''}</div>
+      <div class="muted small">${d.tasks.length} item${d.tasks.length === 1 ? '' : 's'} · ${d.materials.length} study sheet${d.materials.length === 1 ? '' : 's'}</div>
       ${c.sources?.length ? `<div class="src-list">${c.sources.map(srcChip).join('')}</div>` : ''}</div>
-      <div class="row">${!loose && d.questions.total ? `<a class="btn" href="#/practice?course_id=${c.id}">Practice this course</a>` : ''}
+      <div class="row">
         ${can('courses') && !loose ? `<button class="btn ghost" id="edit-course">Edit</button>` : ''}</div></div>
     <div class="tabs">${tabs.map(([k, label, n]) => `<button data-ctab="${k}" class="${courseTab === k ? 'active' : ''}">${label} <span class="muted">${n}</span></button>`).join('')}</div>
     ${groups.map((g) => (show(g.key) ? `<section class="course-section">
@@ -1061,7 +909,7 @@ async function courseDetail(id) {
   $$('[data-ctab]').forEach((b) => (b.onclick = () => { courseTab = b.dataset.ctab; refresh(); }));
   bindTaskRows(view, d.tasks, refresh);
   $$('[data-del-sheet]').forEach((b) => (b.onclick = async () => {
-    if (confirm('Delete this sheet and all questions generated from it?')) { await DEL(`/api/materials/${b.dataset.delSheet}`).catch(fail); refresh(); }
+    if (confirm('Delete this sheet?')) { await DEL(`/api/materials/${b.dataset.delSheet}`).catch(fail); refresh(); }
   }));
   $$('[data-move-sheet]').forEach((b) => (b.onclick = () => openModal(`<h2>Move sheet to…</h2>
     <div class="form"><select id="mv">${courseOpts(loose ? '' : c.id, 'Choose a course…')}</select>
@@ -1229,7 +1077,7 @@ async function classPage() {
 }
 
 // =====================================================================
-// PERMISSIONS (admins only) — who can upload, add tasks, write questions…
+// PERMISSIONS (admins only) — who can upload sheets and MCQ sets, add tasks…
 // =====================================================================
 const PERM_ICONS = {};
 const PRESETS = {
@@ -1304,10 +1152,6 @@ async function checkReminders() {
       sent[key] = 1;
       notify(level === 'overdue' ? `Overdue: ${t.title}` : `Due ${level === '1h' ? 'within the hour' : 'within 24 hours'}: ${t.title}`,
         `${t.type} · ${new Date(t.due_at).toLocaleString()}`);
-    }
-    const today = ymd(new Date());
-    if (r.reviews_due >= 5 && sent['reviews'] !== today) {
-      sent['reviews'] = today; notify('Time to review', `${r.reviews_due} questions are due for review.`);
     }
     localStorage.setItem('reminded', JSON.stringify(sent));
   } catch {}

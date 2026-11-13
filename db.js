@@ -122,6 +122,14 @@ const EXTRA_TABLES = [
     location TEXT DEFAULT '', weeks TEXT NOT NULL DEFAULT 'all')`,
   // notifications a person removed from their own list (others still see them)
   `CREATE TABLE IF NOT EXISTS notification_hidden (user_id INTEGER NOT NULL, notification_id INTEGER NOT NULL, PRIMARY KEY (user_id, notification_id))`,
+  // MCQ Drill: question sets shared with the whole class (raw = the uploaded text, parsed in the browser)
+  `CREATE TABLE IF NOT EXISTS drill_sets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, raw TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0,
+    created_by INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+  // one row each time someone finishes the first round of a set (feeds the study streak)
+  `CREATE TABLE IF NOT EXISTS drill_plays (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, set_id INTEGER NOT NULL,
+    score INTEGER NOT NULL DEFAULT 0, total INTEGER NOT NULL DEFAULT 0, at TEXT NOT NULL DEFAULT (datetime('now')))`,
 ];
 const initProblems = []; // shown on /healthz/diag
 

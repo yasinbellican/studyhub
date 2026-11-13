@@ -22,6 +22,9 @@ a { color: var(--primary); }
 .me { font-size: 13px; }
 .timer-mini { background: rgba(255,255,255,.1); border-radius: 8px; padding: 8px 10px; font-variant-numeric: tabular-nums; cursor: pointer; }
 .view { flex: 1; padding: 28px 32px; max-width: 1200px; }
+/* practice: the MCQ Drill page fills the whole content area */
+.view.bare { padding: 0; max-width: none; }
+.drill-frame { display: block; width: 100%; height: 100vh; height: 100dvh; border: 0; }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
 
 /* cards & grids */
@@ -168,6 +171,8 @@ img, iframe { max-width: 100%; }
   .menu-close { display: block; position: absolute; top: 12px; right: 10px; color: #cfd2ef; font-size: 20px; }
   #nav a { padding: 12px 14px; font-size: 16px; }
   .view { padding: 18px 16px 90px; max-width: none; }
+  .view.bare { padding: 0; }
+  .drill-frame { height: calc(100vh - 56px - env(safe-area-inset-top)); height: calc(100dvh - 56px - env(safe-area-inset-top)); }
   .split { grid-template-columns: 1fr; }
   .reader iframe { height: 70vh; }
 }

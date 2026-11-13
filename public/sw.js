@@ -1,7 +1,7 @@
 // StudyHub service worker: makes the app installable and lets the app shell open
 // instantly (and offline). Class data always comes live from the server.
-const CACHE = 'ejust-shell-v5';
-const SHELL = ['/', '/index.html', '/app.js', '/styles.css', '/manifest.webmanifest',
+const CACHE = 'ejust-shell-v6';
+const SHELL = ['/', '/index.html', '/app.js', '/styles.css', '/drill.html', '/manifest.webmanifest',
   '/icons/icon-192.png', '/icons/icon-512.png', '/icons/favicon-32.png', '/icons/apple-touch-icon.png', '/icons/emblem-64.png', '/logo.png'];
 
 self.addEventListener('install', (e) => {
@@ -22,7 +22,7 @@ self.addEventListener('fetch', (e) => {
 
   // Pages and app code: answer from the saved copy straight away (instant start, works offline) and fetch the
   // newest version in the background. If it changed, the open app is told and switches to it on the next page change.
-  const key = req.mode === 'navigate' ? '/' : req;
+  const key = req.mode === 'navigate' && url.pathname !== '/drill.html' ? '/' : req;
   const sig = (r) => r && (r.headers.get('etag') || r.headers.get('last-modified') || r.headers.get('content-length'));
   e.respondWith((async () => {
     const cache = await caches.open(CACHE);

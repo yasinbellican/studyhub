@@ -118,7 +118,7 @@ const A = [auth, admin];
 // Other members only get the abilities an admin has ticked for them on the Permissions page.
 const PERMISSIONS = {
   sheets: 'Upload & delete study sheets',
-  questions: 'Write, edit & AI-generate MCQs',
+  questions: 'Upload & remove MCQ question sets',
   tasks: 'Add & edit assignments, quizzes & exams',
   courses: 'Add & edit courses',
 };
@@ -321,7 +321,7 @@ app.delete('/api/admin/members/:id', ...A, async (req, res) => {
   const m = await db.get('SELECT * FROM users WHERE id = ?', req.params.id);
   if (!m) return res.json({ ok: true });
   if (m.id === req.user.id) return res.status(400).json({ error: "You can't remove yourself" });
-  await db.batch(['sessions', 'user_tasks', 'progress', 'reviews', 'study_sessions', 'plan_items']
+  await db.batch(['sessions', 'user_tasks', 'progress', 'reviews', 'study_sessions', 'plan_items', 'drill_plays']
     .map((t) => [`DELETE FROM ${t} WHERE user_id = ?`, m.id]).concat([['DELETE FROM users WHERE id = ?', m.id]]));
   forgetAuth();
   res.json({ ok: true });
@@ -724,7 +724,8 @@ app.post('/api/tasks/:id/plan', auth, async (req, res) => {
 // ---------- dashboard & reminders ----------
 async function streak(uid, tz) {
   const dayOf = (d) => new Date(d.getTime() - tz * 60000).toISOString().slice(0, 10);
-  const rows = await db.all('SELECT at FROM reviews WHERE user_id = ? UNION ALL SELECT at FROM study_sessions WHERE user_id = ?', uid, uid);
+  const rows = await db.all(`SELECT at FROM reviews WHERE user_id = ? UNION ALL SELECT at FROM study_sessions WHERE user_id = ?
+    UNION ALL SELECT at FROM drill_plays WHERE user_id = ?`, uid, uid, uid);
   const days = new Set(rows.map((r) => dayOf(new Date(r.at.replace(' ', 'T') + 'Z'))));
   let n = 0; let d = new Date();
   if (!days.has(dayOf(d))) d = new Date(d.getTime() - 86400000);
@@ -745,8 +746,8 @@ app.get('/api/dashboard', auth, async (req, res) => {
     db.all(taskQuery(`${open} AND ${due} BETWEEN $now AND $in3`), tp(req, { $now: now, $in3: in3 })),
     db.all(`SELECT p.*, c.name AS course_name, c.color AS course_color FROM plan_items p LEFT JOIN courses c ON c.id = p.course_id
       WHERE p.user_id = ? AND p.date = ? ORDER BY p.id`, uid, today),
-    db.get('SELECT COUNT(*) AS n FROM progress WHERE user_id = ? AND due_at <= ?', uid, now),
-    db.get('SELECT COUNT(*) AS n FROM questions q LEFT JOIN progress p ON p.question_id = q.id AND p.user_id = ? WHERE p.due_at IS NULL', uid),
+    db.get('SELECT COUNT(*) AS n FROM drill_sets'),
+    db.get('SELECT COALESCE(SUM(total),0) AS n FROM drill_plays WHERE user_id = ? AND at >= ?', uid, weekAgo),
     db.get('SELECT COALESCE(SUM(minutes),0) AS m FROM study_sessions WHERE user_id = ? AND at >= ?', uid, weekAgo),
     db.get('SELECT COUNT(*) AS n, COALESCE(SUM(correct),0) AS c FROM reviews WHERE user_id = ? AND at >= ?', uid, weekAgo),
     streak(uid, tz),
@@ -755,7 +756,7 @@ app.get('/api/dashboard', auth, async (req, res) => {
       FROM user_tasks ut JOIN tasks t ON t.id = ut.task_id LEFT JOIN courses c ON c.id = t.course_id
       WHERE ut.user_id = ? AND ut.grade IS NOT NULL AND t.max_grade > 0 GROUP BY t.course_id`, uid),
   ]);
-  res.json({ overdue, upcoming, due_soon_count: soon.length, today_plan, reviews_due: rd.n, new_questions: nq.n,
+  res.json({ overdue, upcoming, due_soon_count: soon.length, today_plan, question_sets: rd.n, practised_week: nq.n,
     minutes_week: mw.m, answered_week: aw, streak: st, grades });
 });
 
@@ -765,6 +766,43 @@ app.get('/api/reminders', auth, async (req, res) => {
     tp(req, { $soon: new Date(Date.now() + 86400000).toISOString() }))).map(({ id, title, type, due_at }) => ({ id, title, type, due_at }));
   const reviews = (await db.get('SELECT COUNT(*) AS n FROM progress WHERE user_id = ? AND due_at <= ?', req.user.id, nowISO())).n;
   res.json({ tasks, reviews_due: reviews });
+});
+
+// ---------- MCQ Drill: question sets shared with the whole class ----------
+// Everyone can list and practise them; only members with the "questions" permission add or remove them.
+app.get('/api/drill-sets', auth, async (req, res) => {
+  res.json(await db.all(`SELECT s.id, s.name, s.count, s.created_at, u.name AS by_name
+    FROM drill_sets s LEFT JOIN users u ON u.id = s.created_by ORDER BY s.id DESC`));
+});
+app.get('/api/drill-sets/:id', auth, async (req, res) => {
+  const s = await db.get('SELECT id, name, raw, count FROM drill_sets WHERE id = ?', Number(req.params.id));
+  if (!s) throw httpError(404, 'That question set was removed');
+  res.json(s);
+});
+app.post('/api/drill-sets', ...can('questions'), async (req, res) => {
+  const raw = String(req.body.raw || '');
+  const count = Math.floor(Number(req.body.count));
+  const name = String(req.body.name || '').trim().slice(0, 80);
+  if (!raw.trim() || !(count >= 1)) throw httpError(400, 'No questions found in that text');
+  if (raw.length > 600000 || count > 2000) throw httpError(400, 'That set is too big. Split it into smaller sets.');
+  if (!name) throw httpError(400, 'Give the set a name');
+  const r = await db.run('INSERT INTO drill_sets (name, raw, count, created_by) VALUES (?, ?, ?, ?)', name, raw, count, req.user.id);
+  await notify({ kind: 'sheet', title: `New MCQ set: ${name}`, body: `${count} question${count === 1 ? '' : 's'} to practise. Added by ${req.user.name}.`, url: '#/practice' });
+  res.json({ id: Number(r.lastInsertRowid), name, count });
+});
+app.delete('/api/drill-sets/:id', ...can('questions'), async (req, res) => {
+  const id = Number(req.params.id);
+  await db.batch([['DELETE FROM drill_plays WHERE set_id = ?', id], ['DELETE FROM drill_sets WHERE id = ?', id]]);
+  res.json({ ok: true });
+});
+// called when someone finishes the first round of a set
+app.post('/api/drill-sets/:id/play', auth, async (req, res) => {
+  const s = await db.get('SELECT id, count FROM drill_sets WHERE id = ?', Number(req.params.id));
+  if (!s) return res.json({ ok: true });
+  const total = Math.max(0, Math.min(s.count, Math.floor(Number(req.body.total)) || 0));
+  const score = Math.max(0, Math.min(total, Math.floor(Number(req.body.score)) || 0));
+  await db.run('INSERT INTO drill_plays (user_id, set_id, score, total) VALUES (?, ?, ?, ?)', req.user.id, s.id, score, total);
+  res.json({ ok: true });
 });
 
 // ---------- timetable (per section; labs can alternate weekly: week A / week B) ----------
